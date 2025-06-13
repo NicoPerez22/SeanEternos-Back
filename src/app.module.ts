@@ -4,13 +4,21 @@ import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserModule } from './user/user.module';
 import { ConfigModule } from '@nestjs/config';
-import { AuthController } from './auth/auth.controller';
 import { AuthModule } from './auth/auth.module';
+import { TournamentModule } from './tournament/tournament.module';
+import { TeamModule } from './team/team.module';
+import { UploadModule } from './upload/upload.module';
+import { PlayerController } from './player/player.controller';
+import { PlayerModule } from './player/player.module';
 
 @Module({
   imports: [
     UserModule,
     AuthModule,
+    TournamentModule,
+    TeamModule,
+    UploadModule,
+    PlayerModule,
     ConfigModule.forRoot(),
     TypeOrmModule.forRoot({
       type: 'mysql',
@@ -24,7 +32,7 @@ import { AuthModule } from './auth/auth.module';
       autoLoadEntities: true,
     }),
   ],
-  controllers: [AppController, AuthController],
+  controllers: [AppController],
   providers: [AppService],
 })
 export class AppModule {}

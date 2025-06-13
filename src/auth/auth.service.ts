@@ -66,7 +66,12 @@ export class AuthService {
       const token = await this.jwtService.signAsync(payload);
 
       return Object.assign(apiResponse, {
-        data: { token: token, email: user.email },
+        data: {
+          token: token,
+          email: user.email,
+          expiryToken: 10000,
+          nombre: 'Nico',
+        },
         httpCode: HttpStatus.OK,
         message: '',
       });
