@@ -8,9 +8,10 @@ import { Tournament } from 'src/tournament/entity/tournament.entity';
 import { Rounds } from 'src/tournament/entity/rounds.entity';
 import { Image } from 'src/upload/entity/image.entity';
 import { Player } from 'src/player/entity/player.entity';
+import { User } from 'src/user/entity/user.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Team, Image, Player]), UserModule],
+  imports: [TypeOrmModule.forFeature([Team, Image, Player, User]), UserModule],
   controllers: [TeamController],
   providers: [TeamService],
 })

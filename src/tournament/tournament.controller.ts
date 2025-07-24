@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Tournament } from './entity/tournament.entity';
 import { FormatTournament } from 'src/team/entity/format.entity';
+import { CreateTournamentDto } from './dto/tournament.dto';
 
 @Controller('tournament')
 export class TournamentController {
@@ -19,18 +20,18 @@ export class TournamentController {
     return this.tournamentService.getFormats();
   }
 
-  // @Get()
-  // getTournament(): Promise<Tournament[]> {
-  //   return this.tournamentService.getTournament();
-  // }
+  @Post()
+  async createTournament(@Body() dto: CreateTournamentDto) {
+    return await this.tournamentService.createTournament(dto);
+  }
 
-  // @Post()
-  // createTournament(@Body() tournament: any) {
-  //   return this.tournamentService.createTournament(tournament);
-  // }
+  @Get()
+  async getTournaments() {
+    return await this.tournamentService.getTournament();
+  }
 
-  // @Get(':id')
-  // getTournamentByID(@Param('id', ParseIntPipe) id: number) {
-  //   return this.tournamentService.getTournamentById(id);
-  // }
+  @Get(':id')
+  async getTournamentById(@Param('id') id: number) {
+    return await this.tournamentService.getTournamentById(id);
+  }
 }

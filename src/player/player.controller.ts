@@ -19,6 +19,11 @@ export class PlayerController {
     return this.playerService.soFifa();
   }
 
+  @Get('')
+  getPlayers() {
+    return this.playerService.getPlayers();
+  }
+
   @Get('teamId/:id')
   getPlayerByIdTeam(@Param('id', ParseIntPipe) id: number) {
     return this.playerService.getPLayersByIdTeams(id);

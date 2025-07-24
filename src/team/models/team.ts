@@ -5,4 +5,5 @@ export class TeamDTO {
   idLogo: number;
   logo: any;
   players: Array<any>;
+  owner: any;
 }

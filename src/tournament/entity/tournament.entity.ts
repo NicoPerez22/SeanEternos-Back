@@ -8,8 +8,11 @@ import {
   JoinColumn,
   ManyToOne,
   OneToMany,
+  ManyToMany,
+  JoinTable,
 } from 'typeorm';
 import { Matches } from './matches.entity';
+import { FormatTournament } from 'src/team/entity/format.entity';
 
 @Entity({ name: 'tournament' })
 export class Tournament {
@@ -31,9 +34,17 @@ export class Tournament {
   @Column({ nullable: true, default: null })
   updatedAt: Date;
 
-  // @OneToMany(() => Team, (team) => team.tournament)
-  // teams: Team[];
+  @ManyToMany(() => Team)
+  @JoinTable()
+  teams: Team[];
 
   @OneToMany(() => Rounds, (round) => round.tournament)
   rounds: Rounds[];
+
+  @ManyToOne(() => FormatTournament, { nullable: true })
+  @JoinColumn({ name: 'formatId' })
+  format: FormatTournament;
+
+  @Column({ type: 'json', nullable: true })
+  statistics: any;
 }

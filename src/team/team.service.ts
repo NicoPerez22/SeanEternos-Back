@@ -6,15 +6,21 @@ import { ApiResponse } from 'shared/models/apiResponse';
 import { TeamDTO } from './models/team';
 import { Image } from 'src/upload/entity/image.entity';
 import { Player } from 'src/player/entity/player.entity';
+import { User } from 'src/user/entity/user.entity';
 
 @Injectable()
 export class TeamService {
   constructor(
     @InjectRepository(Team) private readonly teamRepository: Repository<Team>,
+
     @InjectRepository(Image)
     private readonly imageRepository: Repository<Image>,
+
     @InjectRepository(Player)
     private readonly playerRepository: Repository<Player>,
+
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
   ) {}
 
   async createTeam(newTeam: TeamDTO) {
@@ -63,7 +69,7 @@ export class TeamService {
     try {
       const team = await this.teamRepository.findOne({
         where: { id: id },
-        relations: ['players'], // Importante para traer los jugadores
+        relations: ['players', 'owner'], // Incluye 'owner' en las relaciones
       });
 
       if (!team) {
@@ -74,24 +80,26 @@ export class TeamService {
         });
       }
 
+      // Si el equipo no tiene owner, user será null
+      const user = team.owner
+        ? await this.userRepository.findOne({ where: { id: team.owner.id } })
+        : null;
+
       teamDTO.id = team.id;
       teamDTO.name = team.name;
       teamDTO.abreviatura = team.abreviatura;
       teamDTO.logo = await this._getImage(team.idLogo);
       teamDTO.idLogo = team.idLogo;
+      teamDTO.owner = user;
 
       // Agregar listado de jugadores al DTO
       teamDTO.players = team.players
         ? await Promise.all(
             team.players.map(async (player) => {
-              let photo;
-
+              let photo: any = null;
               if (player.photo !== null) {
                 photo = await this._getImage(player.photo);
-              } else {
-                photo = null;
               }
-
               return {
                 id: player.id,
                 name: player.name,
@@ -287,11 +295,51 @@ export class TeamService {
     return result;
   }
 
-  private async _getImage(idLogo) {
+  async _getImage(idLogo) {
     return await this.imageRepository.findOne({
       where: {
         id: idLogo,
       },
     });
+  }
+
+  async assignTeamToUser(teamId: number, userId: number) {
+    const apiResponse = new ApiResponse<Team>();
+
+    try {
+      const team = await this.teamRepository.findOne({ where: { id: teamId } });
+      if (!team) {
+        return Object.assign(apiResponse, {
+          data: null,
+          httpCode: HttpStatus.NOT_FOUND,
+          message: 'Equipo no encontrado',
+        });
+      }
+
+      // Busca el usuario (asegúrate de tener el repositorio de User inyectado)
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return Object.assign(apiResponse, {
+          data: null,
+          httpCode: HttpStatus.NOT_FOUND,
+          message: 'Usuario no encontrado',
+        });
+      }
+
+      team.owner = user;
+      await this.teamRepository.save(team);
+
+      return Object.assign(apiResponse, {
+        data: team,
+        httpCode: HttpStatus.OK,
+        message: 'Equipo asignado al usuario correctamente',
+      });
+    } catch (error) {
+      return Object.assign(apiResponse, {
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al asignar el equipo: ${error.message}`,
+      });
+    }
   }
 }

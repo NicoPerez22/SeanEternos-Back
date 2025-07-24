@@ -67,6 +67,7 @@ export class AuthService {
 
       return Object.assign(apiResponse, {
         data: {
+          id: user.id,
           token: token,
           email: user.email,
           expiryToken: 10000,

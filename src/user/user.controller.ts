@@ -17,8 +17,8 @@ export class UserController {
     return this.userService.createUser(newUser);
   }
 
-  // @Get(':id')
-  // getUserByID(@Param('id', ParseIntPipe) id: number) {
-  //   return this.userService.getUserByID(id);
-  // }
+  @Get(':id')
+  getUserByID(@Param('id', ParseIntPipe) id: number) {
+    return this.userService.findUserWithTeams(id);
+  }
 }

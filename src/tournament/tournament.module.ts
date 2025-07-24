@@ -8,7 +8,9 @@ import { Rounds } from './entity/rounds.entity';
 import { FormatTournament } from 'src/team/entity/format.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([FormatTournament])],
+  imports: [
+    TypeOrmModule.forFeature([FormatTournament, Team, Rounds, Tournament]),
+  ],
   controllers: [TournamentController],
   providers: [TournamentService],
   exports: [TypeOrmModule],

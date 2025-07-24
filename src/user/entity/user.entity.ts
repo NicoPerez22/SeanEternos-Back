@@ -1,4 +1,5 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { Team } from 'src/team/entity/team.entity';
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
 
 @Entity({ name: 'users' })
 export class User {
@@ -19,4 +20,7 @@ export class User {
 
   @Column()
   lastName: string;
+
+  @OneToMany(() => Team, (team) => team.owner)
+  teams: Team[];
 }

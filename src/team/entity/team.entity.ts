@@ -31,27 +31,7 @@ export class Team {
   @OneToMany(() => Player, (player) => player.team)
   players: Player[];
 
-  //   @Column()
-  //   logo: string;
-
-  //   @Column()
-  //   capitan: string;
-
-  //   @Column()
-  //   subCapitan: string;
-
-  //   @Column()
-  //   idTorneo: number;
-
-  //   @Column()
-  //   idStats: number;
-
-  //   @Column()
-  //   nacionalidad: string;
-
-  //   @Column()
-  //   isRevision: boolean;
-
-  //   @ManyToOne(() => Tournament, (tournament) => tournament.teams)
-  //   tournament: Tournament;
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'userId' })
+  owner: User;
 }
