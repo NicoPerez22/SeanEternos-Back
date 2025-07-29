@@ -6,4 +6,5 @@ export class TeamDTO {
   logo: any;
   players: Array<any>;
   owner: any;
+  rounds: Array<any>;
 }

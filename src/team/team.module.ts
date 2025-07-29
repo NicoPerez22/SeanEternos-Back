@@ -11,7 +11,10 @@ import { Player } from 'src/player/entity/player.entity';
 import { User } from 'src/user/entity/user.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Team, Image, Player, User]), UserModule],
+  imports: [
+    TypeOrmModule.forFeature([Team, Image, Player, User, Rounds]),
+    UserModule,
+  ],
   controllers: [TeamController],
   providers: [TeamService],
 })

@@ -7,6 +7,7 @@ import { TeamDTO } from './models/team';
 import { Image } from 'src/upload/entity/image.entity';
 import { Player } from 'src/player/entity/player.entity';
 import { User } from 'src/user/entity/user.entity';
+import { Rounds } from 'src/tournament/entity/rounds.entity';
 
 @Injectable()
 export class TeamService {
@@ -21,6 +22,9 @@ export class TeamService {
 
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+
+    @InjectRepository(Rounds)
+    private readonly roundsRepository: Repository<Rounds>,
   ) {}
 
   async createTeam(newTeam: TeamDTO) {
@@ -68,8 +72,8 @@ export class TeamService {
 
     try {
       const team = await this.teamRepository.findOne({
-        where: { id: id },
-        relations: ['players', 'owner'], // Incluye 'owner' en las relaciones
+        where: { id },
+        relations: ['players', 'owner'],
       });
 
       if (!team) {
@@ -80,38 +84,94 @@ export class TeamService {
         });
       }
 
-      // Si el equipo no tiene owner, user será null
+      // Owner
       const user = team.owner
         ? await this.userRepository.findOne({ where: { id: team.owner.id } })
         : null;
 
+      // Datos del equipo
       teamDTO.id = team.id;
       teamDTO.name = team.name;
       teamDTO.abreviatura = team.abreviatura;
-      teamDTO.logo = await this._getImage(team.idLogo);
+      teamDTO.logo = team.idLogo ? await this._getImage(team.idLogo) : null;
       teamDTO.idLogo = team.idLogo;
       teamDTO.owner = user;
 
-      // Agregar listado de jugadores al DTO
+      // Jugadores con foto
       teamDTO.players = team.players
         ? await Promise.all(
-            team.players.map(async (player) => {
-              let photo: any = null;
-              if (player.photo !== null) {
-                photo = await this._getImage(player.photo);
-              }
-              return {
-                id: player.id,
-                name: player.name,
-                valoration: player.valoration,
-                lastName: player.lastName,
-                isHabilitado: player.isHabilitado,
-                position: player.position,
-                photo: photo || null,
-              };
-            }),
+            team.players.map(async (player) => ({
+              id: player.id,
+              name: player.name,
+              valoration: player.valoration,
+              lastName: player.lastName,
+              isHabilitado: player.isHabilitado,
+              position: player.position,
+              photo: player.photo ? await this._getImage(player.photo) : null,
+            })),
           )
         : [];
+
+      // Rounds donde el equipo participa (pueden ser de varios torneos)
+      const rounds = await this.roundsRepository.find({
+        where: [{ home: id }, { away: id }],
+        relations: ['tournament', 'tournament.teams'],
+      });
+
+      if (rounds.length > 0) {
+        // 1️⃣ Recolectar TODOS los equipos de TODOS los torneos involucrados
+        const allTeams: any[] = [];
+        rounds.forEach((round) => {
+          if (round.tournament?.teams) {
+            allTeams.push(...round.tournament.teams);
+          }
+        });
+
+        // 2️⃣ Crear un mapa único de equipos (para evitar duplicados)
+        const uniqueTeamsMap = new Map<number, any>();
+        allTeams.forEach((team) => {
+          if (!uniqueTeamsMap.has(team.id)) {
+            uniqueTeamsMap.set(team.id, team);
+          }
+        });
+
+        // 3️⃣ Agregar logos a cada equipo
+        const teamsWithLogoMap = new Map<number, any>();
+        for (const [teamId, teamData] of uniqueTeamsMap.entries()) {
+          const logo = teamData.idLogo
+            ? await this._getImage(teamData.idLogo)
+            : null;
+          teamsWithLogoMap.set(teamId, { ...teamData, logo });
+        }
+
+        // 4️⃣ Armar las rounds optimizadas
+        teamDTO.rounds = rounds.map((round) => {
+          const homeTeam = teamsWithLogoMap.get(round.home);
+          const awayTeam = teamsWithLogoMap.get(round.away);
+
+          return {
+            idRound: round.id,
+            round: round.round,
+            state: round.state,
+            teamWin: round.teamWin,
+            teamLose: round.teamLose,
+            tournament: round.tournament
+              ? {
+                  id: round.tournament.id,
+                  name: round.tournament.name,
+                }
+              : null,
+            idHome: homeTeam?.id,
+            home: homeTeam?.name,
+            homeLogo: homeTeam?.logo,
+            idAway: awayTeam?.id,
+            away: awayTeam?.name,
+            awayLogo: awayTeam?.logo,
+          };
+        });
+      } else {
+        teamDTO.rounds = [];
+      }
 
       return Object.assign(apiResponse, {
         data: teamDTO,
@@ -131,7 +191,9 @@ export class TeamService {
     const apiResponse = new ApiResponse<TeamDTO[]>();
 
     try {
-      const teams = await this.teamRepository.find();
+      const teams = await this.teamRepository.find({
+        relations: ['owner'],
+      });
 
       if (!teams || teams.length === 0) {
         return Object.assign(apiResponse, {
@@ -149,6 +211,14 @@ export class TeamService {
           teamDTO.abreviatura = team.abreviatura;
           teamDTO.idLogo = team.idLogo;
           teamDTO.logo = await this._getImage(team.idLogo);
+
+          // Busca el owner solo si existe
+          teamDTO.owner = team.owner
+            ? await this.userRepository.findOne({
+                where: { id: team.owner.id },
+              })
+            : null;
+
           return teamDTO;
         }),
       );
@@ -224,75 +294,139 @@ export class TeamService {
     }
   }
 
-  async distributePlayersEqually(teamIds: number[]) {
-    // Obtener todos los jugadores valorados entre 75 y 94
-    const players = await this.playerRepository.find({
-      where: {
-        valoration: Between(75, 94),
-      },
-      order: {
-        valoration: 'DESC',
-      },
-    });
-
-    const numTeams = teamIds.length;
-    if (numTeams === 0) {
-      throw new Error('Debes proporcionar al menos un equipo.');
+  shuffleArray<T>(array: T[]): T[] {
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [array[i], array[j]] = [array[j], array[i]];
     }
+    return array;
+  }
 
-    // Buscar solo los equipos cuyos IDs están en el array recibido
-    const teams = await this.teamRepository.findBy({
-      id: In(teamIds),
+  async distributePlayersEqually(teamIds: number[]) {
+    const players = await this.playerRepository.find({
+      where: { valoration: Between(78, 94) },
+      order: { valoration: 'DESC' },
     });
+
+    // Mezcla los jugadores para que la distribución sea aleatoria
+    const shuffledPlayers = this.shuffleArray([...players]);
+
+    const teams = await this.teamRepository.findBy({ id: In(teamIds) });
     teams.sort((a, b) => a.id - b.id);
 
-    if (teams.length !== numTeams) {
-      throw new Error('Uno o más equipos no existen en la base de datos.');
-    }
+    // Definición de posiciones requeridas
+    const requiredPositions = [
+      { position: 'GK', count: 1 },
+      { position: 'DFC', count: 3 },
+      { position: 'DFD', count: 1 },
+      { position: 'DFI', count: 1 },
+      { position: 'MCD', count: 2 },
+      { position: 'MC', count: 3 },
+      { position: 'MD', count: 1 },
+      { position: 'MI', count: 1 },
+      { position: 'MCO', count: 1 },
+      { position: 'DC', count: 1 },
+    ];
+    const PLAYERS_PER_TEAM = 22;
+    const MIN_AVG = 79.2;
+    const MAX_AVG = 80.2;
 
-    // Inicializar estructura para el draft
+    let availablePlayers = [...shuffledPlayers];
+
     const draftTeams: {
       team: Team;
       players: Player[];
       totalValoracion: number;
-    }[] = teams.map((team) => ({
-      team,
-      players: [],
-      totalValoracion: 0,
-    }));
+      avgValoracion: number;
+    }[] = [];
 
-    // Algoritmo de distribución tipo "snake draft"
-    let direction = 1;
-    let teamIndex = 0;
-    for (const player of players) {
-      draftTeams[teamIndex].players.push(player);
-      draftTeams[teamIndex].totalValoracion += player.valoration;
+    for (const team of teams) {
+      let assignedPlayers: Player[] = [];
+      let attempts = 0;
+      let avg = 0;
 
-      // Asignar el equipo al jugador y guardar en la base de datos
-      player.team = draftTeams[teamIndex].team;
-      await this.playerRepository.save(player);
+      while (attempts < 1000) {
+        let tempPlayers: Player[] = [];
+        let usedIndexes = new Set<number>();
 
-      teamIndex += direction;
-      if (teamIndex === numTeams) {
-        direction = -1;
-        teamIndex = numTeams - 1;
-      } else if (teamIndex < 0) {
-        direction = 1;
-        teamIndex = 0;
+        // Asignar posiciones obligatorias
+        for (const req of requiredPositions) {
+          const candidates = availablePlayers
+            .map((p, idx) => ({ p, idx }))
+            .filter(
+              ({ p, idx }) =>
+                p.position === req.position && !usedIndexes.has(idx),
+            );
+          if (candidates.length < req.count) break;
+
+          for (let i = 0; i < req.count; i++) {
+            const randIdx = Math.floor(Math.random() * candidates.length);
+            const { p, idx } = candidates[randIdx];
+            tempPlayers.push(p);
+            usedIndexes.add(idx);
+            candidates.splice(randIdx, 1);
+          }
+        }
+
+        if (tempPlayers.length < 16) {
+          attempts++;
+          continue;
+        }
+
+        // Asignar el resto de jugadores al azar
+        const remaining = PLAYERS_PER_TEAM - tempPlayers.length;
+        const restCandidates = availablePlayers
+          .map((p, idx) => ({ p, idx }))
+          .filter(({ idx }) => !usedIndexes.has(idx));
+        if (restCandidates.length < remaining) break;
+
+        for (let i = 0; i < remaining; i++) {
+          const randIdx = Math.floor(Math.random() * restCandidates.length);
+          const { p, idx } = restCandidates[randIdx];
+          tempPlayers.push(p);
+          usedIndexes.add(idx);
+          restCandidates.splice(randIdx, 1);
+        }
+
+        avg =
+          tempPlayers.reduce((sum, p) => sum + p.valoration, 0) /
+          PLAYERS_PER_TEAM;
+
+        if (avg >= MIN_AVG && avg <= MAX_AVG) {
+          assignedPlayers = tempPlayers;
+          break;
+        }
+        attempts++;
       }
+
+      if (assignedPlayers.length !== PLAYERS_PER_TEAM) {
+        assignedPlayers = availablePlayers.slice(0, PLAYERS_PER_TEAM);
+        avg =
+          assignedPlayers.reduce((sum, p) => sum + p.valoration, 0) /
+          PLAYERS_PER_TEAM;
+      }
+
+      for (const player of assignedPlayers) {
+        player.team = team;
+      }
+      availablePlayers = availablePlayers.filter(
+        (p) => !assignedPlayers.includes(p),
+      );
+
+      draftTeams.push({
+        team,
+        players: assignedPlayers,
+        totalValoracion: assignedPlayers.reduce(
+          (sum, p) => sum + p.valoration,
+          0,
+        ),
+        avgValoracion: avg,
+      });
     }
 
-    // Calcular promedios y preparar respuesta
-    const result = draftTeams.map((teamDraft) => ({
-      equipo: teamDraft.team.name,
-      promedio:
-        teamDraft.players.length > 0
-          ? teamDraft.totalValoracion / teamDraft.players.length
-          : 0,
-      jugadores: teamDraft.players,
-    }));
+    await this.playerRepository.save(players);
 
-    return result;
+    return draftTeams;
   }
 
   async _getImage(idLogo) {

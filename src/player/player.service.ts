@@ -115,19 +115,16 @@ export class PlayerService {
   }
 
   async removeAllPlayersFromTeams() {
-    // Busca todos los jugadores que tienen equipo asignado
-    const playersWithTeam = await this.playerRepository.find({
-      where: { team: Not(IsNull()) },
-    });
-
-    // Rompe la relación para cada jugador
-    for (const player of playersWithTeam) {
-      player.team = null;
-      await this.playerRepository.save(player);
-    }
+    // Actualiza todos los jugadores que tienen equipo asignado en una sola consulta
+    const result = await this.playerRepository
+      .createQueryBuilder()
+      .update(Player)
+      .set({ team: null })
+      .where('teamId IS NOT NULL')
+      .execute();
 
     return {
-      message: `Se han removido ${playersWithTeam.length} jugadores de sus equipos.`,
+      message: `Se han removido ${result.affected} jugadores de sus equipos.`,
     };
   }
 
