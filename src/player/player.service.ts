@@ -220,6 +220,66 @@ export class PlayerService {
     }
   }
 
+  async getPlayersWithTeams() {
+    const apiResponse = new ApiResponse<any[]>();
+
+    try {
+      // ✅ Buscar solo jugadores que tienen equipo
+      const players = await this.playerRepository.find({
+        where: { team: Not(IsNull()) }, // Jugadores con equipo asignado
+        relations: ['team'],
+        order: { valoration: 'DESC' },
+      });
+
+      if (!players || players.length === 0) {
+        return Object.assign(apiResponse, {
+          data: [],
+          httpCode: HttpStatus.OK,
+          message: 'No existen jugadores asignados a equipos',
+        });
+      }
+
+      // ✅ Mapea jugadores incluyendo info del equipo y su logo
+      const playersWithTeam = await Promise.all(
+        players.map(async (player) => {
+          const logo = player.team
+            ? await this._getImage(player.team.idLogo)
+            : null;
+
+          return {
+            id: player.id,
+            name: player.name,
+            lastName: player.lastName,
+            valoration: player.valoration,
+            photo: player.photo,
+            isHabilitado: player.isHabilitado,
+            position: player.position,
+            fullName: `${player.name} ${player.lastName}`,
+            team: {
+              id: player.team!.id,
+              name: player.team!.name,
+              abreviatura: player.team!.abreviatura,
+              idLogo: player.team!.idLogo,
+              logo,
+            },
+          };
+        }),
+      );
+
+      return Object.assign(apiResponse, {
+        data: playersWithTeam,
+        httpCode: HttpStatus.OK,
+        message: '',
+      });
+    } catch (error) {
+      return Object.assign(apiResponse, {
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al cargar jugadores con equipos: ${error.message}`,
+      });
+    }
+  }
+
   async soFifa() {
     const browser = await puppeteer.launch({
       headless: 'shell',

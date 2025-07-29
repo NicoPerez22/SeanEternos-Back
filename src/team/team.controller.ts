@@ -9,7 +9,6 @@ import {
   Patch,
   Delete,
 } from '@nestjs/common';
-import { Team } from './entity/team.entity';
 
 @Controller('team')
 export class TeamController {

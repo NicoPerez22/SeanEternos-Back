@@ -2,6 +2,7 @@ import { TournamentService } from './tournament.service';
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,

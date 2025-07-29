@@ -14,14 +14,14 @@ import { PlayerService } from './player.service';
 export class PlayerController {
   constructor(private readonly playerService: PlayerService) {}
 
-  @Get('sofifa')
-  getTeams() {
-    return this.playerService.soFifa();
-  }
-
   @Get('')
   getPlayers() {
     return this.playerService.getPlayers();
+  }
+
+  @Get('market')
+  getPlayersMarket() {
+    return this.playerService.getPlayersWithTeams();
   }
 
   @Get('teamId/:id')

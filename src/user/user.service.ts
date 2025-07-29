@@ -28,6 +28,10 @@ export class UserService {
     return this.userRepository.findOne({ where: { id } });
   }
 
+  findUser() {
+    return this.userRepository.find();
+  }
+
   async findUserWithTeams(id: number) {
     const apiResponse = new ApiResponse<TeamDTO>();
     let teamDTO = new TeamDTO();

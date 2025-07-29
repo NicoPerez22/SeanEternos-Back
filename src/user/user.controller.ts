@@ -21,4 +21,9 @@ export class UserController {
   getUserByID(@Param('id', ParseIntPipe) id: number) {
     return this.userService.findUserWithTeams(id);
   }
+
+  @Get()
+  getUsers() {
+    return this.userService.findUser();
+  }
 }

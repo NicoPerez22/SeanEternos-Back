@@ -14,6 +14,7 @@ import { ApiResponse } from 'shared/models/apiResponse';
 import { FormatTournament } from 'src/team/entity/format.entity';
 import { Image } from 'src/upload/entity/image.entity';
 import { TeamService } from 'src/team/team.service';
+import { DataSource } from 'typeorm';
 
 @Injectable()
 export class TournamentService {
@@ -37,6 +38,7 @@ export class TournamentService {
     private readonly imageRepository: Repository<Image>,
 
     private readonly teamService: TeamService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async getFormats() {

@@ -30,6 +30,13 @@ import { PlayerModule } from './player/player.module';
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
       synchronize: false,
       autoLoadEntities: true,
+      extra: {
+        connectionLimit: 10, // máximo 10 conexiones vivas
+        waitForConnections: true, // no lanzar error, poner en cola
+        queueLimit: 0, // sin límite de cola
+        connectTimeout: 10000, // 10 segundos
+        acquireTimeout: 10000, // timeout para adquirir conexión
+      },
     }),
   ],
   controllers: [AppController],

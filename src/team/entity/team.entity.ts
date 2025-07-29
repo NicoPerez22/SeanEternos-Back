@@ -33,5 +33,5 @@ export class Team {
 
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'userId' })
-  owner: User;
+  owner: User | null;
 }

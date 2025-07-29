@@ -1,4 +1,4 @@
-import { Between, Repository, In } from 'typeorm';
+import { Between, Repository, In, DataSource } from 'typeorm';
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { Team } from './entity/team.entity';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -25,6 +25,8 @@ export class TeamService {
 
     @InjectRepository(Rounds)
     private readonly roundsRepository: Repository<Rounds>,
+
+    private readonly DataSource: DataSource,
   ) {}
 
   async createTeam(newTeam: TeamDTO) {
@@ -303,130 +305,195 @@ export class TeamService {
   }
 
   async distributePlayersEqually(teamIds: number[]) {
-    const players = await this.playerRepository.find({
-      where: { valoration: Between(78, 94) },
-      order: { valoration: 'DESC' },
-    });
+    // ✅ Crear un queryRunner para usar una sola conexión
+    const queryRunner = this.DataSource.createQueryRunner();
 
-    // Mezcla los jugadores para que la distribución sea aleatoria
-    const shuffledPlayers = this.shuffleArray([...players]);
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    const teams = await this.teamRepository.findBy({ id: In(teamIds) });
-    teams.sort((a, b) => a.id - b.id);
+    try {
+      // ✅ Obtener jugadores y equipos usando la conexión del queryRunner
+      const players = await queryRunner.manager.find(Player, {
+        where: { valoration: Between(77, 94) },
+        order: { valoration: 'DESC' },
+      });
 
-    // Definición de posiciones requeridas
-    const requiredPositions = [
-      { position: 'GK', count: 1 },
-      { position: 'DFC', count: 3 },
-      { position: 'DFD', count: 1 },
-      { position: 'DFI', count: 1 },
-      { position: 'MCD', count: 2 },
-      { position: 'MC', count: 3 },
-      { position: 'MD', count: 1 },
-      { position: 'MI', count: 1 },
-      { position: 'MCO', count: 1 },
-      { position: 'DC', count: 1 },
-    ];
-    const PLAYERS_PER_TEAM = 22;
-    const MIN_AVG = 79.2;
-    const MAX_AVG = 80.2;
+      const teams = await queryRunner.manager.find(Team, {
+        where: { id: In(teamIds) },
+        order: { id: 'ASC' },
+      });
 
-    let availablePlayers = [...shuffledPlayers];
+      const PLAYERS_PER_TEAM = 22;
+      const MIN_AVG = 79.5;
+      const MAX_AVG = 80.2;
 
-    const draftTeams: {
-      team: Team;
-      players: Player[];
-      totalValoracion: number;
-      avgValoracion: number;
-    }[] = [];
+      // ✅ Crear subgrupos específicos para las reglas
+      const group88 = players.filter((p) => p.valoration === 88);
+      const group89_91 = players.filter(
+        (p) => p.valoration >= 89 && p.valoration <= 91,
+      );
+      const group87 = players.filter((p) => p.valoration === 87);
+      const group85_86 = players.filter(
+        (p) => p.valoration >= 85 && p.valoration <= 86,
+      );
 
-    for (const team of teams) {
-      let assignedPlayers: Player[] = [];
-      let attempts = 0;
-      let avg = 0;
+      const midPlayers = players.filter(
+        (p) => p.valoration >= 80 && p.valoration <= 84,
+      );
+      const lowPlayers = players.filter(
+        (p) => p.valoration >= 77 && p.valoration <= 79,
+      );
+      const extraPlayers = lowPlayers.filter(
+        (p) => p.valoration >= 78 && p.valoration <= 79,
+      );
 
-      while (attempts < 1000) {
-        let tempPlayers: Player[] = [];
-        let usedIndexes = new Set<number>();
+      // ✅ Validar disponibilidad mínima
+      if (
+        group88.length < teams.length ||
+        group89_91.length < teams.length ||
+        group87.length < teams.length ||
+        group85_86.length < teams.length
+      ) {
+        throw new Error(
+          'No hay suficientes jugadores para los rangos TOP definidos.',
+        );
+      }
+      if (midPlayers.length < teams.length * 8) {
+        throw new Error('No hay suficientes jugadores MID (80-84).');
+      }
+      if (lowPlayers.length < teams.length * 8) {
+        throw new Error('No hay suficientes jugadores LOW (77-79).');
+      }
 
-        // Asignar posiciones obligatorias
-        for (const req of requiredPositions) {
-          const candidates = availablePlayers
-            .map((p, idx) => ({ p, idx }))
-            .filter(
-              ({ p, idx }) =>
-                p.position === req.position && !usedIndexes.has(idx),
-            );
-          if (candidates.length < req.count) break;
+      const draftTeams = teams.map((team) => ({
+        team,
+        players: [] as Player[],
+        totalValoracion: 0,
+        avgValoracion: 0,
+      }));
 
-          for (let i = 0; i < req.count; i++) {
-            const randIdx = Math.floor(Math.random() * candidates.length);
-            const { p, idx } = candidates[randIdx];
-            tempPlayers.push(p);
-            usedIndexes.add(idx);
-            candidates.splice(randIdx, 1);
-          }
+      // ✅ Función helper para asignar 1 jugador por equipo desde un grupo
+      const assignOnePerTeam = (group: Player[]) => {
+        for (const team of draftTeams) {
+          const player = group.shift()!;
+          team.players.push(player);
+          team.totalValoracion += player.valoration;
         }
+      };
 
-        if (tempPlayers.length < 16) {
-          attempts++;
-          continue;
+      // ✅ Asignación según reglas
+      assignOnePerTeam(group88); // 1 jugador con 88
+      assignOnePerTeam(group89_91); // 1 jugador entre 89-91
+      assignOnePerTeam(group87); // 1 jugador con 87
+      assignOnePerTeam(group85_86); // 1 jugador entre 85-86
+
+      // ✅ Asignar 8 jugadores 80–84
+      for (let i = 0; i < 8; i++) {
+        for (const team of draftTeams) {
+          const player = midPlayers.shift()!;
+          team.players.push(player);
+          team.totalValoracion += player.valoration;
         }
+      }
 
-        // Asignar el resto de jugadores al azar
-        const remaining = PLAYERS_PER_TEAM - tempPlayers.length;
-        const restCandidates = availablePlayers
-          .map((p, idx) => ({ p, idx }))
-          .filter(({ idx }) => !usedIndexes.has(idx));
-        if (restCandidates.length < remaining) break;
-
-        for (let i = 0; i < remaining; i++) {
-          const randIdx = Math.floor(Math.random() * restCandidates.length);
-          const { p, idx } = restCandidates[randIdx];
-          tempPlayers.push(p);
-          usedIndexes.add(idx);
-          restCandidates.splice(randIdx, 1);
+      // ✅ Asignar 8 jugadores 77–79
+      for (let i = 0; i < 8; i++) {
+        for (const team of draftTeams) {
+          const player = lowPlayers.shift()!;
+          team.players.push(player);
+          team.totalValoracion += player.valoration;
         }
+      }
 
-        avg =
-          tempPlayers.reduce((sum, p) => sum + p.valoration, 0) /
-          PLAYERS_PER_TEAM;
+      // ✅ Asignar 2 extras (78-79)
+      for (let i = 0; i < 2; i++) {
+        for (const team of draftTeams) {
+          if (extraPlayers.length === 0) break;
+          const player = extraPlayers.shift()!;
+          team.players.push(player);
+          team.totalValoracion += player.valoration;
+        }
+      }
 
-        if (avg >= MIN_AVG && avg <= MAX_AVG) {
-          assignedPlayers = tempPlayers;
+      // ✅ Completar si falta con los jugadores restantes
+      const remainingPlayers = players.filter(
+        (p) => !draftTeams.some((t) => t.players.includes(p)),
+      );
+      let i = 0;
+      while (remainingPlayers.length > 0) {
+        const team = draftTeams[i % draftTeams.length];
+        if (team.players.length < PLAYERS_PER_TEAM) {
+          const player = remainingPlayers.shift()!;
+          team.players.push(player);
+          team.totalValoracion += player.valoration;
+        }
+        i++;
+        if (draftTeams.every((t) => t.players.length >= PLAYERS_PER_TEAM))
           break;
-        }
+      }
+
+      // ✅ Calcular promedios
+      draftTeams.forEach(
+        (t) => (t.avgValoracion = t.totalValoracion / PLAYERS_PER_TEAM),
+      );
+
+      // ✅ Balancear promedios
+      let attempts = 0;
+      const MAX_ATTEMPTS = 300;
+      while (attempts < MAX_ATTEMPTS) {
+        const overTeam = draftTeams.find((t) => t.avgValoracion > MAX_AVG);
+        const underTeam = draftTeams.find((t) => t.avgValoracion < MIN_AVG);
+        if (!overTeam || !underTeam) break;
+
+        const overSorted = [...overTeam.players].sort(
+          (a, b) => b.valoration - a.valoration,
+        );
+        const underSorted = [...underTeam.players].sort(
+          (a, b) => a.valoration - b.valoration,
+        );
+
+        const highPlayer = overSorted[0];
+        const lowPlayer = underSorted[0];
+
+        overTeam.players.splice(overTeam.players.indexOf(highPlayer), 1);
+        underTeam.players.splice(underTeam.players.indexOf(lowPlayer), 1);
+
+        overTeam.players.push(lowPlayer);
+        underTeam.players.push(highPlayer);
+
+        overTeam.totalValoracion = overTeam.players.reduce(
+          (s, p) => s + p.valoration,
+          0,
+        );
+        underTeam.totalValoracion = underTeam.players.reduce(
+          (s, p) => s + p.valoration,
+          0,
+        );
+
+        overTeam.avgValoracion = overTeam.totalValoracion / PLAYERS_PER_TEAM;
+        underTeam.avgValoracion = underTeam.totalValoracion / PLAYERS_PER_TEAM;
+
         attempts++;
       }
 
-      if (assignedPlayers.length !== PLAYERS_PER_TEAM) {
-        assignedPlayers = availablePlayers.slice(0, PLAYERS_PER_TEAM);
-        avg =
-          assignedPlayers.reduce((sum, p) => sum + p.valoration, 0) /
-          PLAYERS_PER_TEAM;
+      // ✅ Actualizar jugadores en BD
+      for (const team of draftTeams) {
+        for (const player of team.players) {
+          player.team = team.team;
+        }
       }
 
-      for (const player of assignedPlayers) {
-        player.team = team;
-      }
-      availablePlayers = availablePlayers.filter(
-        (p) => !assignedPlayers.includes(p),
-      );
+      await queryRunner.manager.save(players);
 
-      draftTeams.push({
-        team,
-        players: assignedPlayers,
-        totalValoracion: assignedPlayers.reduce(
-          (sum, p) => sum + p.valoration,
-          0,
-        ),
-        avgValoracion: avg,
-      });
+      await queryRunner.commitTransaction();
+      return draftTeams;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      // ✅ Liberar conexión siempre
+      await queryRunner.release();
     }
-
-    await this.playerRepository.save(players);
-
-    return draftTeams;
   }
 
   async _getImage(idLogo) {
@@ -439,10 +506,17 @@ export class TeamService {
 
   async assignTeamToUser(teamId: number, userId: number) {
     const apiResponse = new ApiResponse<Team>();
+    const queryRunner = this.DataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
     try {
-      const team = await this.teamRepository.findOne({ where: { id: teamId } });
+      const team = await queryRunner.manager.findOne(Team, {
+        where: { id: teamId },
+      });
       if (!team) {
+        await queryRunner.rollbackTransaction();
         return Object.assign(apiResponse, {
           data: null,
           httpCode: HttpStatus.NOT_FOUND,
@@ -450,9 +524,11 @@ export class TeamService {
         });
       }
 
-      // Busca el usuario (asegúrate de tener el repositorio de User inyectado)
-      const user = await this.userRepository.findOne({ where: { id: userId } });
+      const user = await queryRunner.manager.findOne(User, {
+        where: { id: userId },
+      });
       if (!user) {
+        await queryRunner.rollbackTransaction();
         return Object.assign(apiResponse, {
           data: null,
           httpCode: HttpStatus.NOT_FOUND,
@@ -460,8 +536,21 @@ export class TeamService {
         });
       }
 
+      // ✅ Verificar si el usuario ya tiene un equipo asignado
+      const previousTeam = await queryRunner.manager.findOne(Team, {
+        where: { owner: { id: userId } },
+      });
+
+      if (previousTeam && previousTeam.id !== teamId) {
+        previousTeam.owner = null; // Quitamos la relación
+        await queryRunner.manager.save(previousTeam);
+      }
+
+      // ✅ Asignar el nuevo equipo
       team.owner = user;
-      await this.teamRepository.save(team);
+      await queryRunner.manager.save(team);
+
+      await queryRunner.commitTransaction();
 
       return Object.assign(apiResponse, {
         data: team,
@@ -469,11 +558,14 @@ export class TeamService {
         message: 'Equipo asignado al usuario correctamente',
       });
     } catch (error) {
+      await queryRunner.rollbackTransaction();
       return Object.assign(apiResponse, {
         data: null,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
         message: `Error al asignar el equipo: ${error.message}`,
       });
+    } finally {
+      await queryRunner.release();
     }
   }
 }
