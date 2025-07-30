@@ -34,6 +34,15 @@ export class PlayerController {
     return this.playerService.createPlayer(newTeam);
   }
 
+  @Post('transfer/:id')
+  assignTransferPlayer(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() isTransfer: any,
+  ) {
+    const transferStatus = isTransfer.isTransfer;
+    return this.playerService.assignTransferPlayer(id, transferStatus);
+  }
+
   @Delete('playersRemove')
   deletePlayersInAllTeams() {
     return this.playerService.removeAllPlayersFromTeams();

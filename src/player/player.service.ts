@@ -226,7 +226,7 @@ export class PlayerService {
     try {
       // ✅ Buscar solo jugadores que tienen equipo
       const players = await this.playerRepository.find({
-        where: { team: Not(IsNull()) }, // Jugadores con equipo asignado
+        where: { isTransfer: true }, // Jugadores con equipo asignado
         relations: ['team'],
         order: { valoration: 'DESC' },
       });
@@ -370,5 +370,38 @@ export class PlayerService {
         id: idLogo,
       },
     });
+  }
+
+  async assignTransferPlayer(id: number, isTransfer: boolean) {
+    const apiResponse = new ApiResponse<Player>();
+
+    try {
+      const player = await this.playerRepository.findOne({
+        where: { id },
+      });
+
+      if (!player) {
+        return Object.assign(apiResponse, {
+          data: null,
+          httpCode: HttpStatus.NOT_FOUND,
+          message: 'Jugador no encontrado',
+        });
+      }
+
+      player.isTransfer = isTransfer;
+      await this.playerRepository.save(player);
+
+      return Object.assign(apiResponse, {
+        data: player,
+        httpCode: HttpStatus.OK,
+        message: 'Estado de transferencia actualizado',
+      });
+    } catch (error) {
+      return Object.assign(apiResponse, {
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al actualizar el estado de transferencia: ${error.message}`,
+      });
+    }
   }
 }

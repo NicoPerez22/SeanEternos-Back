@@ -27,6 +27,9 @@ export class Player {
   @Column()
   position: string;
 
+  @Column()
+  isTransfer: boolean;
+
   @ManyToOne(() => Team, (team) => team.players, { nullable: true })
   team: Team | null;
 }
