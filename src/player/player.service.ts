@@ -404,4 +404,59 @@ export class PlayerService {
       });
     }
   }
+
+  async disabledPlayers() {
+    const apiResponse = new ApiResponse<any[]>();
+
+    try {
+      const players = await this.playerRepository.find({
+        where: { isHabilitado: false },
+        relations: ['team'],
+        order: { valoration: 'DESC' },
+      });
+
+      if (!players || players.length === 0) {
+        return Object.assign(apiResponse, {
+          data: null,
+          httpCode: HttpStatus.OK,
+          message: 'No existen jugadores registrados',
+        });
+      }
+
+      // Mapea cada jugador para incluir el equipo y el logo del equipo
+      const playersWithTeam = await Promise.all(
+        players.map(async (player) => {
+          let teamWithLogo: any = null;
+          if (player.team) {
+            const logo = await this._getImage(player.team.idLogo);
+            teamWithLogo = {
+              id: player.team.id,
+              name: player.team.name,
+              logo,
+            };
+          }
+          return {
+            id: player.id,
+            photo: player.photo,
+            name: player.name,
+            lastName: player.lastName,
+            isHabilitado: player.isHabilitado,
+            team: teamWithLogo,
+          };
+        }),
+      );
+
+      return Object.assign(apiResponse, {
+        data: playersWithTeam,
+        httpCode: HttpStatus.OK,
+        message: '',
+      });
+    } catch (error) {
+      return Object.assign(apiResponse, {
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al cargar los jugadores: ${error.message}`,
+      });
+    }
+  }
 }

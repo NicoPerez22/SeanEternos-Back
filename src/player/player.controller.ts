@@ -12,7 +12,7 @@ import { PlayerService } from './player.service';
 
 @Controller('player')
 export class PlayerController {
-  constructor(private readonly playerService: PlayerService) {}
+  constructor(private readonly playerService: PlayerService) { }
 
   @Get('')
   getPlayers() {
@@ -59,5 +59,11 @@ export class PlayerController {
     @Param('idTeam', ParseIntPipe) idTeam: number,
   ) {
     return this.playerService.transferPlayerToTeam(id, idTeam);
+  }
+
+  @Get('disabled')
+  disablePlayers(
+  ) {
+    return this.playerService.disabledPlayers();
   }
 }

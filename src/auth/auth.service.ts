@@ -73,6 +73,7 @@ export class AuthService {
           expiryToken: 10000,
           nombre: 'Nico',
           idRol: user.idRol,
+          idTeam: user.teams
         },
         httpCode: HttpStatus.OK,
         message: '',
