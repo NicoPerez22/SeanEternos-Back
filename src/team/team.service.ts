@@ -4,29 +4,23 @@ import { Team } from './entity/team.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ApiResponse } from 'shared/models/apiResponse';
 import { TeamDTO } from './models/team';
-import { Image } from 'src/upload/entity/image.entity';
 import { Player } from 'src/player/entity/player.entity';
 import { User } from 'src/user/entity/user.entity';
 import { Rounds } from 'src/tournament/entity/rounds.entity';
+import { ImagesService } from 'shared/services/images/images.service';
 
 @Injectable()
 export class TeamService {
   constructor(
     @InjectRepository(Team) private readonly teamRepository: Repository<Team>,
 
-    @InjectRepository(Image)
-    private readonly imageRepository: Repository<Image>,
-
-    @InjectRepository(Player)
-    private readonly playerRepository: Repository<Player>,
-
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
 
     @InjectRepository(Rounds)
     private readonly roundsRepository: Repository<Rounds>,
-
     private readonly DataSource: DataSource,
+    private readonly imageServices: ImagesService,
   ) {}
 
   async createTeam(newTeam: TeamDTO) {
@@ -40,11 +34,12 @@ export class TeamService {
       });
 
       if (team) {
-        return Object.assign(apiResponse, {
+        return {
+          ...apiResponse,
           data: null,
           httpCode: HttpStatus.OK,
           message: 'Ya existe un equipo con ese nombre',
-        });
+        };
       }
 
       const createdTeam = this.teamRepository.create({
@@ -54,17 +49,19 @@ export class TeamService {
       });
 
       const resp = await this.teamRepository.save(createdTeam);
-      return Object.assign(apiResponse, {
+      return {
+        ...apiResponse,
         data: resp,
         httpCode: HttpStatus.OK,
         message: 'Equipo creado con exito',
-      });
+      };
     } catch (error) {
-      return Object.assign(apiResponse, {
+      return {
+        ...apiResponse,
         data: null,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
         message: `Error al crear el equipo: ${error.message}`,
-      });
+      };
     }
   }
 
@@ -95,7 +92,9 @@ export class TeamService {
       teamDTO.id = team.id;
       teamDTO.name = team.name;
       teamDTO.abreviatura = team.abreviatura;
-      teamDTO.logo = team.idLogo ? await this._getImage(team.idLogo) : null;
+      teamDTO.logo = team.idLogo
+        ? await this.imageServices.getImage(team.idLogo)
+        : null;
       teamDTO.idLogo = team.idLogo;
       teamDTO.owner = user;
 
@@ -109,7 +108,7 @@ export class TeamService {
               lastName: player.lastName,
               isHabilitado: player.isHabilitado,
               position: player.position,
-              photo: player.photo ? await this._getImage(player.photo) : null,
+              isTransfer: player.isTransfer,
             })),
           )
         : [];
@@ -141,7 +140,7 @@ export class TeamService {
         const teamsWithLogoMap = new Map<number, any>();
         for (const [teamId, teamData] of uniqueTeamsMap.entries()) {
           const logo = teamData.idLogo
-            ? await this._getImage(teamData.idLogo)
+            ? await this.imageServices.getImage(teamData.idLogo)
             : null;
           teamsWithLogoMap.set(teamId, { ...teamData, logo });
         }
@@ -212,7 +211,7 @@ export class TeamService {
           teamDTO.name = team.name;
           teamDTO.abreviatura = team.abreviatura;
           teamDTO.idLogo = team.idLogo;
-          teamDTO.logo = await this._getImage(team.idLogo);
+          teamDTO.logo = await this.imageServices.getImage(team.idLogo);
 
           // Busca el owner solo si existe
           teamDTO.owner = team.owner
@@ -277,7 +276,7 @@ export class TeamService {
           teamDTO.name = team.name;
           teamDTO.abreviatura = team.abreviatura;
           teamDTO.idLogo = team.idLogo;
-          teamDTO.logo = await this._getImage(team.idLogo);
+          teamDTO.logo = await this.imageServices.getImage(team.idLogo);
           return teamDTO;
         }),
       );
@@ -563,14 +562,6 @@ export class TeamService {
     } finally {
       await queryRunner.release();
     }
-  }
-
-  async _getImage(idLogo) {
-    return await this.imageRepository.findOne({
-      where: {
-        id: idLogo,
-      },
-    });
   }
 
   async assignTeamToUser(teamId: number, userId: number) {

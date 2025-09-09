@@ -2,72 +2,78 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entity/user.entity';
-import { Image } from 'src/upload/entity/image.entity';
 import { TeamDTO } from 'src/team/models/team';
 import { ApiResponse } from 'shared/models/apiResponse';
+import { ImagesService } from 'shared/services/images/images.service';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
-
-    @InjectRepository(Image)
-    private readonly imageRepository: Repository<Image>,
+    private readonly ImagesService: ImagesService,
   ) {}
 
-  createUser(user) {
-    return this.userRepository.save(user);
+  async createUser(user) {
+    return await this.userRepository.save(user);
   }
 
-  findOneByEmail(email: string) {
-    return this.userRepository.findOne({ where: { email } });
+  async findOneByEmail(email: string) {
+    return await this.userRepository.findOne({ where: { email } });
   }
 
-  findOneById(id: number) {
-    return this.userRepository.findOne({ where: { id } });
+  async findOneById(id: number) {
+    return await this.userRepository.findOne({ where: { id } });
   }
 
-  findUser() {
-    return this.userRepository.find();
+  async findUser() {
+    return await this.userRepository.find();
   }
 
   async findUserWithTeams(id: number) {
     const apiResponse = new ApiResponse<TeamDTO>();
-    let teamDTO = new TeamDTO();
+    const teamDTO = new TeamDTO();
 
-    const user = await this.userRepository.findOne({
-      where: { id },
-      relations: ['teams'],
-    });
+    try {
+      const user = await this.userRepository.findOne({
+        where: { id },
+        relations: ['teams'],
+      });
 
-    if (!user) return null;
+      if (!user) {
+        return Object.assign(apiResponse, {
+          data: null,
+          httpCode: HttpStatus.OK,
+          message: 'No existe un usuario con ese id',
+        });
+      }
 
-    // Si no tiene equipos, retorna el usuario tal cual
-    if (!user.teams || user.teams.length === 0) return user;
+      if (!user.teams || user.teams.length === 0) {
+        return Object.assign(apiResponse, {
+          data: null,
+          httpCode: HttpStatus.OK,
+          message: 'El usuario no tiene equipos',
+        });
+      }
 
-    // Solo el equipo en la posición 0, agregando el logo
-    const team = user.teams[0];
-    const logo = await this._getImage(team.idLogo);
+      const team = user.teams[0];
+      const logo = await this.ImagesService.getImage(team.idLogo);
 
-    teamDTO.name = team.name;
-    teamDTO.id = team.id;
-    teamDTO.logo = logo;
+      teamDTO.name = team.name;
+      teamDTO.id = team.id;
+      teamDTO.logo = logo;
 
-    let resp = { ...teamDTO, user };
-
-    return Object.assign(apiResponse, {
-      data: resp,
-      httpCode: HttpStatus.OK,
-      message: '',
-    });
-  }
-
-  async _getImage(idLogo) {
-    return await this.imageRepository.findOne({
-      where: {
-        id: idLogo,
-      },
-    });
+      return Object.assign(apiResponse, {
+        data: { ...teamDTO, user },
+        httpCode: HttpStatus.OK,
+        message: '',
+      });
+    } catch (error) {
+      return Object.assign(apiResponse, {
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al buscar el usuario: ${error.message}`,
+      });
+    }
   }
 }

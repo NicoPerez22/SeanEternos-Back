@@ -10,6 +10,7 @@ import { Image } from 'src/upload/entity/image.entity';
 import { Player } from 'src/player/entity/player.entity';
 import { TeamService } from 'src/team/team.service';
 import { User } from 'src/user/entity/user.entity';
+import { ImagesService } from 'shared/services/images/images.service';
 
 @Module({
   imports: [
@@ -24,7 +25,7 @@ import { User } from 'src/user/entity/user.entity';
     ]),
   ],
   controllers: [TournamentController],
-  providers: [TournamentService, TeamService],
+  providers: [TournamentService, TeamService, ImagesService],
   exports: [TypeOrmModule],
 })
 export class TournamentModule {}

@@ -12,7 +12,7 @@ import { PlayerService } from './player.service';
 
 @Controller('player')
 export class PlayerController {
-  constructor(private readonly playerService: PlayerService) { }
+  constructor(private readonly playerService: PlayerService) {}
 
   @Get('')
   getPlayers() {
@@ -40,7 +40,7 @@ export class PlayerController {
     @Body() isTransfer: any,
   ) {
     const transferStatus = isTransfer.isTransfer;
-    return this.playerService.assignTransferPlayer(id, transferStatus);
+    return this.playerService.assignPlayerTransfer(id, transferStatus);
   }
 
   @Delete('playersRemove')
@@ -49,7 +49,7 @@ export class PlayerController {
   }
 
   @Patch(':id')
-  updateTeam(@Param('id', ParseIntPipe) id: number, @Body() player: any) {
+  updatePlayer(@Param('id', ParseIntPipe) id: number, @Body() player: any) {
     return this.playerService.updatePlayer(id, player);
   }
 
@@ -58,12 +58,11 @@ export class PlayerController {
     @Param('id', ParseIntPipe) id: number,
     @Param('idTeam', ParseIntPipe) idTeam: number,
   ) {
-    return this.playerService.transferPlayerToTeam(id, idTeam);
+    return this.playerService.transferPlayers(id, idTeam);
   }
 
   @Get('disabled')
-  disablePlayers(
-  ) {
+  disablePlayers() {
     return this.playerService.disabledPlayers();
   }
 }
