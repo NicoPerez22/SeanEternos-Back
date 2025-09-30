@@ -15,6 +15,7 @@ import { FormatTournament } from 'src/team/entity/format.entity';
 import { Image } from 'src/upload/entity/image.entity';
 import { TeamService } from 'src/team/team.service';
 import { DataSource } from 'typeorm';
+import { TournamentDTO } from './dto/tournament.dto';
 
 @Injectable()
 export class TournamentService {
@@ -130,30 +131,42 @@ export class TournamentService {
   }
 
   async getTournament() {
-    const apiResponse = new ApiResponse<any[]>();
+    const apiResponse = new ApiResponse<TournamentDTO[]>();
 
     try {
       const torneo = await this.tournamentRepository.find();
 
       if (!torneo || torneo.length === 0) {
-        return Object.assign(apiResponse, {
+        return {
+          ...apiResponse,
           data: null,
           httpCode: HttpStatus.OK,
-          message: 'No existen formatos de torneo',
-        });
+          message: 'No existen torneos',
+        };
       }
 
-      return Object.assign(apiResponse, {
-        data: torneo,
+      const resp = torneo.map((elem) => {
+        return new TournamentDTO({
+          name: elem.name,
+          logo: elem.logo,
+          isActive: elem.isActive,
+          startDate: '',
+        });
+      });
+
+      return {
+        ...apiResponse,
+        data: resp,
         httpCode: HttpStatus.OK,
         message: '',
-      });
+      };
     } catch (error) {
-      return Object.assign(apiResponse, {
+      return {
+        ...apiResponse,
         data: null,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
         message: `Error al cargar los equipos: ${error.message}`,
-      });
+      };
     }
   }
 
