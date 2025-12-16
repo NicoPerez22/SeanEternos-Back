@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Any, Repository } from 'typeorm';
 import { Tournament } from './entity/tournament.entity';
 import { MatchesInterface } from './matches.interface';
 import { Team } from 'src/team/entity/team.entity';
@@ -110,24 +110,36 @@ export class TournamentService {
       const torneo = await this.tournamentRepository.find();
 
       if (!torneo || torneo.length === 0) {
-        return Object.assign(apiResponse, {
+        return {
+          ...apiResponse,
           data: null,
           httpCode: HttpStatus.OK,
           message: 'No existen torneos',
-        });
+        };
       }
 
-      return Object.assign(apiResponse, {
-        data: torneo,
+      const resp = torneo.map((elem) => {
+        return ({
+          name: elem.name,
+          logo: elem.logo,
+          isActive: elem.isActive,
+          startDate: '',
+        });
+      });
+
+      return {
+        ...apiResponse,
+        data: resp,
         httpCode: HttpStatus.OK,
         message: '',
-      });
+      };
     } catch (error) {
-      return Object.assign(apiResponse, {
+      return {
+        ...apiResponse,
         data: null,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
         message: `Error al cargar los torneos: ${error.message}`,
-      });
+      };
     }
   }
 
