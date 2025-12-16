@@ -7,6 +7,7 @@ import {
   JoinColumn,
   ManyToOne,
   OneToMany,
+  ManyToMany,
 } from 'typeorm';
 import { PlayersTeam } from './player_team.entity';
 import { Tournament } from 'src/tournament/entity/tournament.entity';
@@ -34,4 +35,13 @@ export class Team {
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'userId' })
   owner: User | null;
+
+  @ManyToMany(() => Tournament, (t) => t.teams)
+  tournaments: Tournament[];
+
+  @OneToMany(() => Rounds, (round) => round.homeTeam)
+  homeRounds: Rounds[];
+
+  @OneToMany(() => Rounds, (round) => round.awayTeam)
+  awayRounds: Rounds[];
 }

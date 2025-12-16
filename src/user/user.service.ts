@@ -1,10 +1,11 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entity/user.entity';
 import { TeamDTO } from 'src/team/models/team';
 import { ApiResponse } from 'shared/models/apiResponse';
 import { ImagesService } from 'shared/services/images/images.service';
+import { ResponseUserDTO } from './models/user';
 
 @Injectable()
 export class UserService {
@@ -27,7 +28,25 @@ export class UserService {
   }
 
   async findUser() {
-    return await this.userRepository.find();
+    const apiResponse = new ApiResponse<ResponseUserDTO>();
+    const resp = await this.userRepository.find();
+
+    const usersDto = resp.map(
+      (user) =>
+        new ResponseUserDTO({
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          lastName: user.lastName,
+        }),
+    );
+
+    return {
+      ...apiResponse,
+      httpCode: HttpStatus.OK,
+      message: 'List All Users',
+      data: usersDto,
+    };
   }
 
   async findUserWithTeams(id: number) {
@@ -40,13 +59,7 @@ export class UserService {
         relations: ['teams'],
       });
 
-      if (!user) {
-        return Object.assign(apiResponse, {
-          data: null,
-          httpCode: HttpStatus.OK,
-          message: 'No existe un usuario con ese id',
-        });
-      }
+      if (!user) throw new NotFoundException(`Cant not found user ${id}`);
 
       if (!user.teams || user.teams.length === 0) {
         return Object.assign(apiResponse, {
@@ -64,9 +77,9 @@ export class UserService {
       teamDTO.logo = logo;
 
       return Object.assign(apiResponse, {
-        data: { ...teamDTO, user },
         httpCode: HttpStatus.OK,
         message: '',
+        data: { ...teamDTO, user },
       });
     } catch (error) {
       return Object.assign(apiResponse, {

@@ -26,6 +26,6 @@ import { ImagesService } from 'shared/services/images/images.service';
   ],
   controllers: [TournamentController],
   providers: [TournamentService, TeamService, ImagesService],
-  exports: [TypeOrmModule],
+  exports: [TypeOrmModule, TournamentService],
 })
 export class TournamentModule {}

@@ -2,6 +2,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,6 +16,7 @@ import { FormatTournament } from 'src/team/entity/format.entity';
 import { Image } from 'src/upload/entity/image.entity';
 import { TeamService } from 'src/team/team.service';
 import { DataSource } from 'typeorm';
+import { CreateTournamentDto } from './dto/tournament.dto';
 
 @Injectable()
 export class TournamentService {
@@ -41,94 +43,66 @@ export class TournamentService {
     private readonly dataSource: DataSource,
   ) {}
 
+  // -----------------------------------------------------
+  // GET FORMATS
+  // -----------------------------------------------------
   async getFormats() {
     const apiResponse = new ApiResponse<any[]>();
 
     try {
-      const formats = await this.formatsRepository.find();
+      const formats = await this.dataSource.getRepository('formats').find();
 
-      if (!formats || formats.length === 0) {
-        return Object.assign(apiResponse, {
-          data: null,
+      if (!formats.length) {
+        return {
+          ...apiResponse,
           httpCode: HttpStatus.OK,
           message: 'No existen formatos de torneo',
-        });
+        };
       }
 
-      return Object.assign(apiResponse, {
-        data: formats,
+      return {
+        ...apiResponse,
         httpCode: HttpStatus.OK,
-        message: '',
-      });
+        message: 'No existen formatos de torneo',
+        data: formats,
+      };
     } catch (error) {
-      return Object.assign(apiResponse, {
-        data: null,
-        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
-        message: `Error al cargar los equipos: ${error.message}`,
-      });
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.NOT_FOUND,
+        message: 'No existen formatos de torneo',
+      };
     }
   }
 
-  async createTournament(tournament: any) {
-    const { name, logo, teamsIds, formatId } = tournament;
+  // -----------------------------------------------------
+  // CREATE TOURNAMENT (SP)
+  // -----------------------------------------------------
+  async createTournament(dto: CreateTournamentDto) {
+    const { name, logo, formatId, teamsIds, rounds } = dto;
 
-    const tournamentFound = await this.tournamentRepository.findOne({
-      where: { name },
-    });
-    if (tournamentFound) {
-      throw new HttpException('El torneo ya existe', HttpStatus.CONFLICT);
-    }
-
-    const equipos = await this.validateTeamsExist(teamsIds);
-
-    await this.teamService.distributePlayersEqually(teamsIds);
-    const matchesResult = this.generateMatchesFormatLeague(equipos);
-
-    // Guarda las rondas como entidades
-    const roundsEntities = await Promise.all(
-      matchesResult.jornada.map(async (match) => {
-        const round = this.roundsRepository.create({
-          round: match.round ?? 1,
-          home: match.home.id || match.home,
-          away: match.away.id || match.away,
-          state: match.state ?? null,
-          teamWin: match.teamWin ?? null,
-          teamLose: match.teamLose ?? null,
-        });
-        return await this.roundsRepository.save(round);
-      }),
+    const result: any = await this.dataSource.query(
+      `CALL sp_create_tournament(?, ?, ?, ?, ?)`,
+      [
+        name,
+        logo,
+        formatId ?? null,
+        JSON.stringify(teamsIds),
+        JSON.stringify(rounds),
+      ],
     );
 
-    let format: FormatTournament | undefined = undefined;
-    if (formatId) {
-      const foundFormat = await this.formatsRepository.findOne({
-        where: { id: formatId },
-      });
-      if (foundFormat) {
-        format = foundFormat;
-      }
-    }
+    const tournamentId = result?.[0]?.[0]?.tournamentId;
 
-    const statistics = {
-      totalTeams: equipos.length,
-      totalRounds: roundsEntities.length,
+    return {
+      message: 'Torneo creado exitosamente',
+      tournamentId,
     };
-
-    const newTournament = this.tournamentRepository.create({
-      name,
-      logo,
-      teams: equipos,
-      rounds: roundsEntities,
-      format,
-      statistics,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    return await this.tournamentRepository.save(newTournament);
   }
 
+  // -----------------------------------------------------
+  // GET ALL TOURNAMENTS
+  // -----------------------------------------------------
   async getTournament() {
     const apiResponse = new ApiResponse<any[]>();
 
@@ -139,7 +113,7 @@ export class TournamentService {
         return Object.assign(apiResponse, {
           data: null,
           httpCode: HttpStatus.OK,
-          message: 'No existen formatos de torneo',
+          message: 'No existen torneos',
         });
       }
 
@@ -152,161 +126,219 @@ export class TournamentService {
       return Object.assign(apiResponse, {
         data: null,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
-        message: `Error al cargar los equipos: ${error.message}`,
+        message: `Error al cargar los torneos: ${error.message}`,
       });
     }
   }
 
-  generateMatchesFormatLeague(teams: Array<any>): any {
-    this.teams = teams;
-    const totalRounds = this.teams.length - 1;
-    const roundMatches: Array<any> = [];
-
-    for (let round = 0; round < totalRounds; round++) {
-      for (let i = 0; i < this.teams.length / 2; i++) {
-        const home = this.teams[i];
-        const away = this.teams[this.teams.length - 1 - i];
-        const match =
-          round % 2 === 0 ? { home, away } : { home: away, away: home };
-
-        const newMatch = new MatchesInterface();
-        Object.assign(newMatch, match);
-        roundMatches.push(newMatch);
-      }
-
-      this.rotateTeams();
-    }
-
-    return {
-      jornada: roundMatches,
-      fechaNumero: this.incrementId(),
-    };
-  }
-
+  // -----------------------------------------------------
+  // GET TOURNAMENT BY ID (con logos y rounds mergeados)
+  // -----------------------------------------------------
   async getTournamentById(id: number) {
     const tournamentFound = await this.tournamentRepository.findOne({
       where: { id },
-      relations: ['teams', 'rounds', 'format'],
+      relations: ['format'],
     });
 
     if (!tournamentFound) {
       throw new HttpException('El torneo no existe', HttpStatus.NOT_FOUND);
     }
 
-    // Agrega el logo a cada equipo
-    const teamsWithLogo = await Promise.all(
-      tournamentFound.teams.map(async (team) => {
-        const logo = await this._getImage(team.idLogo);
-        return {
-          ...team,
-          logo,
-        };
-      }),
-    );
-
-    // rounds con logo de equipos
-    const mergedRounds = tournamentFound.rounds.map((round) => {
-      const homeTeam = teamsWithLogo.find((team) => team.id === round.home);
-      const awayTeam = teamsWithLogo.find((team) => team.id === round.away);
-
-      return {
-        idHome: homeTeam?.id,
-        home: homeTeam?.name,
-        homeLogo: homeTeam?.logo,
-        idAway: awayTeam?.id,
-        away: awayTeam?.name,
-        awayLogo: awayTeam?.logo,
-        round: round.round,
-        state: round.state,
-        teamWin: round.teamWin,
-        teamLose: round.teamLose,
-      };
-    });
-
     return {
       httpCode: HttpStatus.OK,
       name: tournamentFound.name,
       logo: tournamentFound.logo,
       format: tournamentFound.format,
-      teams: teamsWithLogo,
-      rounds: mergedRounds,
       statistics: tournamentFound.statistics,
     };
   }
 
-  async drawTournament(teams: Team[]) {
-    const rounds: Array<any> = [];
-    this.shuffleArray(teams);
-
-    let roundNumber = 1;
-    while (teams.length > 1) {
-      const nextRoundTeams = [];
-
-      for (let i = 0; i < teams.length; i += 2) {
-        const round = this.roundsRepository.create({
-          round: roundNumber,
-          home: teams[i].id,
-          away: teams[i + 1].id,
-        });
-
-        const savedRound = await this.roundsRepository.save(round);
-        rounds.push(savedRound);
-      }
-
-      teams = nextRoundTeams;
-      roundNumber++;
-    }
-
-    return rounds;
+  // -----------------------------------------------------
+  // STANDINGS (team_statistics view)
+  // -----------------------------------------------------
+  async getStandings(tournamentId: number) {
+    return this.dataSource.query(
+      `
+      SELECT *
+      FROM team_statistics
+      WHERE tournamentId = ?
+      ORDER BY points DESC, goalDifference DESC, goalsFor DESC;
+      `,
+      [tournamentId],
+    );
   }
 
-  private async validateTeamsExist(teamsIds: number[]): Promise<Team[]> {
-    const equipos = await this.teamRepository.findByIds(teamsIds);
+  // -----------------------------------------------------
+  // RANKING (same view but lighter)
+  // -----------------------------------------------------
+  async getRanking(tournamentId: number) {
+    const apiResponse = new ApiResponse<any[]>();
 
-    if (equipos.length !== teamsIds.length) {
-      throw new NotFoundException('Some equipos not found');
-    }
+    const result: any = await this.dataSource.query(
+      `
+      SELECT 
+          t.id AS teamId,
+          t.name AS teamName,
 
-    return equipos;
-  }
+          COALESCE(ts.points, 0) AS points,
+          COALESCE(ts.goalDifference, 0) AS goalDifference,
+          COALESCE(ts.goalsFor, 0) AS goalsFor,
+          COALESCE(ts.goalsAgainst, 0) AS goalsAgainst,
+          COALESCE(ts.matchesPlayed, 0) AS matchesPlayed,
+          COALESCE(ts.wins, 0) AS wins,
+          COALESCE(ts.draws, 0) AS draws,
+          COALESCE(ts.losses, 0) AS losses
 
-  private mergeRoundsWithTeams(rounds: Rounds[], teams: Team[]) {
-    return rounds.map((round) => {
-      const homeTeam = teams.find((team) => team.id === round.home);
-      const awayTeam = teams.find((team) => team.id === round.away);
+      FROM tournament_teams tt
+      JOIN teams t ON t.id = tt.teamsId
 
-      return {
-        idHome: homeTeam?.id,
-        home: homeTeam?.name,
-        idAway: awayTeam?.id,
-        away: awayTeam?.name,
-      };
+      LEFT JOIN team_statistics ts 
+          ON ts.teamId = t.id 
+          AND ts.tournamentId = ?
+
+      WHERE tt.tournamentId = ?
+      ORDER BY points DESC, goalDifference DESC;
+    `,
+      [tournamentId, tournamentId],
+    );
+
+    return Object.assign(apiResponse, {
+      data: result,
+      httpCode: HttpStatus.OK,
+      message: '',
     });
   }
 
-  private rotateTeams() {
-    const lastTeam = this.teams.pop();
-    if (lastTeam) {
-      this.teams.splice(1, 0, lastTeam);
-    }
+  // -----------------------------------------------------
+  // GLOBAL TOURNAMENT STATS (tournament_statistics view)
+  // -----------------------------------------------------
+  async getTournamentStats(tournamentId: number) {
+    const stats = await this.dataSource.query(
+      `
+      SELECT *
+      FROM tournament_statistics
+      WHERE tournamentId = ?;
+      `,
+      [tournamentId],
+    );
+
+    return stats[0] || null;
   }
 
-  private incrementId(): number {
-    return ++this.latestId;
+  // -----------------------------------------------------
+  // HIGHLIGHTS (best attack, defense, leader)
+  // -----------------------------------------------------
+  async getHighlights(tournamentId: number) {
+    const result = await this.dataSource.query(
+      `
+      SELECT 
+        bestAttackTeam,
+        bestDefenseTeam,
+        leaderTeam
+      FROM tournament_statistics
+      WHERE tournamentId = ?;
+      `,
+      [tournamentId],
+    );
+
+    return result[0] || null;
   }
 
-  private shuffleArray(array: any[]) {
-    for (let i = array.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [array[i], array[j]] = [array[j], array[i]];
-    }
+  // -----------------------------------------------------
+  // TEAM STATS FOR SPECIFIC TOURNAMENT
+  // -----------------------------------------------------
+  async getTeamStats(teamId: number, tournamentId: number) {
+    const result = await this.dataSource.query(
+      `
+      SELECT *
+      FROM team_statistics
+      WHERE teamId = ? AND tournamentId = ?;
+      `,
+      [teamId, tournamentId],
+    );
+
+    return result[0] || null;
   }
 
   async _getImage(idLogo) {
-    return await this.imageRepository.findOne({
-      where: {
-        id: idLogo,
-      },
-    });
+    return this.imageRepository.findOne({ where: { id: idLogo } });
+  }
+
+  generateMatchesFormatLeague(teams: Array<any>) {
+    const workingTeams = [...teams];
+
+    // Si es impar → agregar BYE
+    if (workingTeams.length % 2 !== 0) {
+      workingTeams.push({ id: null });
+    }
+
+    const numTeams = workingTeams.length;
+    const numRounds = numTeams - 1;
+    const matchesPerRound = numTeams / 2;
+
+    const jornada: any = [];
+
+    for (let round = 0; round < numRounds; round++) {
+      for (let i = 0; i < matchesPerRound; i++) {
+        const home = workingTeams[i];
+        const away = workingTeams[numTeams - 1 - i];
+
+        // Saltar BYE
+        if (!home.id || !away.id) continue;
+
+        jornada.push({
+          round: round + 1,
+          home: home.id,
+          away: away.id,
+          state: 0,
+          teamWin: null,
+          teamLose: null,
+        });
+      }
+
+      // Rotación Round Robin
+      workingTeams.splice(1, 0, workingTeams.pop());
+    }
+
+    return {
+      jornada,
+      totalRounds: numRounds,
+      totalMatches: jornada.length,
+    };
+  }
+
+  async getRoundsPaginated(tournamentId: number, page: number, limit: number) {
+    const result = await this.dataSource.query(
+      `CALL sp_get_tournament_rounds_paginated_pro(?, ?, ?)`,
+      [tournamentId, page, limit],
+    );
+
+    return {
+      pagination: result[0][0],
+      rounds: result[1],
+    };
+  }
+
+  async saveMatchReport(dto: any) {
+    const { roundId, tournamentId, homeGoals, awayGoals, events } = dto;
+
+    try {
+      const result = await this.dataSource.query(
+        `CALL sp_save_match_report(?, ?, ?, ?, ?)`,
+        [roundId, tournamentId, homeGoals, awayGoals, JSON.stringify(events)],
+      );
+
+      const reportId = result?.[0]?.[0]?.reportId;
+
+      return {
+        httpCode: 200,
+        message: 'Reporte guardado correctamente',
+        reportId,
+      };
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Error al guardar el reporte: ${error.sqlMessage || error.message}`,
+      );
+    }
   }
 }

@@ -16,32 +16,41 @@ export class Rounds {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ nullable: true, default: null })
-  name: string;
-
-  @Column()
-  round: number;
-
-  @Column()
-  home: number;
-
-  @Column()
-  away: number;
-
-  @Column({ nullable: true, default: null })
-  state: number;
-
-  @Column({ nullable: true, default: null })
-  teamWin: number;
-
-  @Column({ nullable: true, default: null })
-  teamLose: number;
-
-  @ManyToOne(() => Tournament, (tournament) => tournament.rounds, {
-    eager: true,
-  })
+  @ManyToOne(() => Tournament, (tournament) => tournament.rounds)
+  @JoinColumn({ name: 'tournamentId' })
   tournament: Tournament;
 
-  // @OneToMany(() => Team, (team) => team.tournament)
-  // teams: Team[];
+  @Column({ name: 'round' })
+  round: number;
+
+  // 👇 Estas dos columnas SON esenciales
+  @Column({ name: 'home' })
+  home: number;
+
+  @Column({ name: 'away' })
+  away: number;
+
+  @Column({ nullable: true })
+  state: number;
+
+  @Column({ nullable: true })
+  teamWin: number;
+
+  @Column({ nullable: true })
+  teamLose: number;
+
+  @Column({ default: 0 })
+  homeGoals: number;
+
+  @Column({ default: 0 })
+  awayGoals: number;
+
+  // 👇 Relaciones correctas (TypeORM ahora sí sabe qué buscar)
+  @ManyToOne(() => Team)
+  @JoinColumn({ name: 'home' })
+  homeTeam: Team;
+
+  @ManyToOne(() => Team)
+  @JoinColumn({ name: 'away' })
+  awayTeam: Team;
 }

@@ -1,3 +1,4 @@
+import { TournamentService } from 'src/tournament/tournament.service';
 import { TeamService } from './team.service';
 import {
   Body,
@@ -8,11 +9,15 @@ import {
   ParseIntPipe,
   Patch,
   Delete,
+  Query,
 } from '@nestjs/common';
 
 @Controller('team')
 export class TeamController {
-  constructor(private readonly teamService: TeamService) {}
+  constructor(
+    private readonly teamService: TeamService,
+    private readonly tournamentService: TournamentService
+  ) {}
 
   @Get()
   getTeams() {
@@ -50,5 +55,13 @@ export class TeamController {
   @Delete(':id')
   deleteTeam(@Param('id', ParseIntPipe) id: number) {
     return this.teamService.delete(id);
+  }
+
+  @Get(':id/stats')
+  getTeamStats(
+    @Param('id') teamId: number,
+    @Query('tournamentId') tournamentId: number,
+  ) {
+    return this.tournamentService.getTeamStats(teamId, tournamentId);
   }
 }

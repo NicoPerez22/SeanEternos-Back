@@ -1,15 +1,5 @@
 import { TournamentService } from './tournament.service';
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  ParseIntPipe,
-  Post,
-} from '@nestjs/common';
-import { Tournament } from './entity/tournament.entity';
-import { FormatTournament } from 'src/team/entity/format.entity';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { CreateTournamentDto } from './dto/tournament.dto';
 
 @Controller('tournament')
@@ -34,5 +24,39 @@ export class TournamentController {
   @Get(':id')
   async getTournamentById(@Param('id') id: number) {
     return await this.tournamentService.getTournamentById(id);
+  }
+
+  @Get(':id/standings')
+  getStandings(@Param('id') tournamentId: number) {
+    return this.tournamentService.getStandings(tournamentId);
+  }
+
+  @Get(':id/stats')
+  getTournamentStats(@Param('id') tournamentId: number) {
+    return this.tournamentService.getTournamentStats(tournamentId);
+  }
+
+  @Get(':id/ranking')
+  getRanking(@Param('id') tournamentId: number) {
+    return this.tournamentService.getRanking(tournamentId);
+  }
+
+  @Get(':id/highlights')
+  getHighlights(@Param('id') tournamentId: number) {
+    return this.tournamentService.getHighlights(tournamentId);
+  }
+
+  @Get(':id/:page/:limit')
+  getRoundsPagination(
+    @Param('id') tournamentId: number,
+    @Param('page') page: number,
+    @Param('limit') limit: number,
+  ) {
+    return this.tournamentService.getRoundsPaginated(tournamentId, page, limit);
+  }
+
+  @Post('/report')
+  async saveReport(@Body() dto: any) {
+    return await this.tournamentService.saveMatchReport(dto);
   }
 }

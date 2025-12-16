@@ -246,9 +246,9 @@ export class PlayerService {
 
       return {
         ...apiResponse,
-        data: playersWithTeam,
         httpCode: HttpStatus.OK,
         message: '',
+        data: playersWithTeam,
       };
     } catch (error) {
       return {

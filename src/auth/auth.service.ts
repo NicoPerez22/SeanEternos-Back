@@ -62,6 +62,7 @@ export class AuthService {
         });
       }
 
+      const team = await this.userService.findUserWithTeams(user.id);
       const payload = { email: user.email };
       const token = await this.jwtService.signAsync(payload);
 
@@ -71,9 +72,9 @@ export class AuthService {
           token: token,
           email: user.email,
           expiryToken: 10000,
-          nombre: 'Nico',
+          nombre: user.name,
           idRol: user.idRol,
-          idTeam: user.teams
+          idTeam: team.data ? team.data.id : null,
         },
         httpCode: HttpStatus.OK,
         message: '',

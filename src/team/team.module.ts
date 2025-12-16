@@ -10,11 +10,14 @@ import { Image } from 'src/upload/entity/image.entity';
 import { Player } from 'src/player/entity/player.entity';
 import { User } from 'src/user/entity/user.entity';
 import { ImagesService } from 'shared/services/images/images.service';
+import { TournamentService } from 'src/tournament/tournament.service';
+import { TournamentModule } from 'src/tournament/tournament.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Team, Image, Player, User, Rounds]),
     UserModule,
+    TournamentModule
   ],
   controllers: [TeamController],
   providers: [TeamService, ImagesService],

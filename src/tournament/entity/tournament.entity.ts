@@ -35,7 +35,11 @@ export class Tournament {
   updatedAt: Date;
 
   @ManyToMany(() => Team)
-  @JoinTable()
+  @JoinTable({
+    name: 'tournament_teams',
+    joinColumn: { name: 'tournamentId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'teamsId', referencedColumnName: 'id' },
+  })
   teams: Team[];
 
   @OneToMany(() => Rounds, (round) => round.tournament)
