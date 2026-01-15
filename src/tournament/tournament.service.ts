@@ -120,10 +120,11 @@ export class TournamentService {
 
       const resp = torneo.map((elem) => {
         return ({
+          id: elem.id,
           name: elem.name,
           logo: elem.logo,
           isActive: elem.isActive,
-          startDate: '',
+          startDate: elem.startDate,
         });
       });
 

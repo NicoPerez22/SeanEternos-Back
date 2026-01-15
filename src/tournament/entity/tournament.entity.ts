@@ -29,6 +29,12 @@ export class Tournament {
   isActive: boolean;
 
   @Column({ nullable: true, default: null })
+  startDate: Date;
+
+  @Column({ nullable: true, default: null })
+  endDate: Date;
+
+  @Column({ nullable: true, default: null })
   createdAt: Date;
 
   @Column({ nullable: true, default: null })
