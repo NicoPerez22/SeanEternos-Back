@@ -67,15 +67,18 @@ export class TeamService {
 
   async getTeamByID(id: number) {
     const apiResponse = new ApiResponse<TeamDTO>();
-    const teamDTO = new TeamDTO();
 
     try {
-      const team = await this.teamRepository.findOne({
-        where: { id },
-        relations: ['players', 'owner'],
-      });
+      const result = await this.DataSource.query('CALL sp_get_team_detail(?)', [
+        id,
+      ]);
 
-      if (!team) {
+      // MySQL suele devolver: [rs1, rs2, rs3, ...]
+      const teamRows = result?.[0] ?? [];
+      const playersRows = result?.[1] ?? [];
+      const roundsRows = result?.[2] ?? [];
+
+      if (!teamRows.length) {
         return Object.assign(apiResponse, {
           data: null,
           httpCode: HttpStatus.OK,
@@ -83,103 +86,77 @@ export class TeamService {
         });
       }
 
-      // Owner
-      const user = team.owner
-        ? await this.userRepository.findOne({ where: { id: team.owner.id } })
+      const teamRow = teamRows[0];
+
+      // Cache de logos para evitar repetir llamadas
+      const logoCache = new Map<number, any>();
+      const getLogoCached = async (idLogo?: number | null) => {
+        if (!idLogo) return null;
+        const key = Number(idLogo);
+        if (logoCache.has(key)) return logoCache.get(key);
+        const img = await this.imageServices.getImage(key);
+        logoCache.set(key, img);
+        return img;
+      };
+
+      const teamDTO = new TeamDTO();
+      teamDTO.id = Number(teamRow.teamId);
+      teamDTO.name = teamRow.teamName;
+      teamDTO.abreviatura = teamRow.abreviatura;
+      teamDTO.idLogo = teamRow.idLogo ? Number(teamRow.idLogo) : null;
+      teamDTO.logo = await getLogoCached(teamDTO.idLogo);
+
+      teamDTO.owner = teamRow.ownerId
+        ? {
+            id: Number(teamRow.ownerId),
+            name: teamRow.ownerName,
+            lastName: teamRow.ownerLastName,
+            email: teamRow.ownerEmail,
+          }
         : null;
 
-      // Datos del equipo
-      teamDTO.id = team.id;
-      teamDTO.name = team.name;
-      teamDTO.abreviatura = team.abreviatura;
-      teamDTO.logo = team.idLogo
-        ? await this.imageServices.getImage(team.idLogo)
-        : null;
-      teamDTO.idLogo = team.idLogo;
-      teamDTO.owner = user;
+      teamDTO.players = (playersRows ?? []).map((p: any) => ({
+        id: Number(p.id),
+        name: p.name,
+        lastName: p.lastName,
+        valoration: Number(p.valoration),
+        isHabilitado: Number(p.isHabilitado),
+        position: p.position,
+        isTransfer: Number(p.isTransfer),
+      }));
 
-      // Jugadores con foto
-      teamDTO.players = team.players
-        ? await Promise.all(
-            team.players.map(async (player) => ({
-              id: player.id,
-              name: player.name,
-              valoration: player.valoration,
-              lastName: player.lastName,
-              isHabilitado: player.isHabilitado,
-              position: player.position,
-              isTransfer: player.isTransfer,
-            })),
-          )
-        : [];
+      // Rounds + logos
+      teamDTO.rounds = await Promise.all(
+        (roundsRows ?? []).map(async (r: any) => ({
+          idRound: Number(r.idRound),
+          round: Number(r.roundNumber),
+          state: r.state,
+          teamWin: r.teamWin !== null ? Number(r.teamWin) : null,
+          teamLose: r.teamLose !== null ? Number(r.teamLose) : null,
+          tournament: r.tournamentId
+            ? { id: Number(r.tournamentId), name: r.tournamentName }
+            : null,
 
-      // Rounds donde el equipo participa (pueden ser de varios torneos)
-      const rounds = await this.roundsRepository.find({
-        where: [{ home: id }, { away: id }],
-        relations: ['tournament', 'tournament.teams'],
-      });
+          idHome: r.homeId !== null ? Number(r.homeId) : null,
+          home: r.homeName ?? null,
+          homeLogo: await getLogoCached(
+            r.homeIdLogo ? Number(r.homeIdLogo) : null,
+          ),
 
-      if (rounds.length > 0) {
-        // 1️⃣ Recolectar TODOS los equipos de TODOS los torneos involucrados
-        const allTeams: any[] = [];
-        rounds.forEach((round) => {
-          if (round.tournament?.teams) {
-            allTeams.push(...round.tournament.teams);
-          }
-        });
-
-        // 2️⃣ Crear un mapa único de equipos (para evitar duplicados)
-        const uniqueTeamsMap = new Map<number, any>();
-        allTeams.forEach((team) => {
-          if (!uniqueTeamsMap.has(team.id)) {
-            uniqueTeamsMap.set(team.id, team);
-          }
-        });
-
-        // 3️⃣ Agregar logos a cada equipo
-        const teamsWithLogoMap = new Map<number, any>();
-        for (const [teamId, teamData] of uniqueTeamsMap.entries()) {
-          const logo = teamData.idLogo
-            ? await this.imageServices.getImage(teamData.idLogo)
-            : null;
-          teamsWithLogoMap.set(teamId, { ...teamData, logo });
-        }
-
-        // 4️⃣ Armar las rounds optimizadas
-        teamDTO.rounds = rounds.map((round) => {
-          const homeTeam = teamsWithLogoMap.get(round.home);
-          const awayTeam = teamsWithLogoMap.get(round.away);
-
-          return {
-            idRound: round.id,
-            round: round.round,
-            state: round.state,
-            teamWin: round.teamWin,
-            teamLose: round.teamLose,
-            tournament: round.tournament
-              ? {
-                  id: round.tournament.id,
-                  name: round.tournament.name,
-                }
-              : null,
-            idHome: homeTeam?.id,
-            home: homeTeam?.name,
-            homeLogo: homeTeam?.logo,
-            idAway: awayTeam?.id,
-            away: awayTeam?.name,
-            awayLogo: awayTeam?.logo,
-          };
-        });
-      } else {
-        teamDTO.rounds = [];
-      }
+          idAway: r.awayId !== null ? Number(r.awayId) : null,
+          away: r.awayName ?? null,
+          awayLogo: await getLogoCached(
+            r.awayIdLogo ? Number(r.awayIdLogo) : null,
+          ),
+        })),
+      );
 
       return Object.assign(apiResponse, {
         data: teamDTO,
         httpCode: HttpStatus.OK,
         message: '',
       });
-    } catch (error) {
+    } catch (error: any) {
       return Object.assign(apiResponse, {
         data: null,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,

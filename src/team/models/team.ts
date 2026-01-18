@@ -2,7 +2,7 @@ export class TeamDTO {
   id: number;
   name: string;
   abreviatura: string;
-  idLogo: number;
+  idLogo: any;
   logo: any;
   players: Array<any>;
   owner: any;

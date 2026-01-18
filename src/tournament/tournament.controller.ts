@@ -59,4 +59,14 @@ export class TournamentController {
   async saveReport(@Body() dto: any) {
     return await this.tournamentService.saveMatchReport(dto);
   }
+
+  @Post(':id/draft/start')
+  async startDraft(@Param('id') tournamentId: number) {
+    return await this.tournamentService.executeDraftAsync(tournamentId);
+  }
+
+  @Get(':id/status')
+  getStatusDraft(@Param('id') tournamentId: number) {
+    return this.tournamentService.getDraftStatus(tournamentId);
+  }
 }
