@@ -1,10 +1,48 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Player } from './entity/player.entity';
 import { ApiResponse } from 'shared/models/apiResponse';
 import { Team } from 'src/team/entity/team.entity';
 import { ImagesService } from 'shared/services/images/images.service';
+
+type PlayerTeamRow = {
+  id: number;
+  name: string;
+  lastName: string;
+  valoration: number;
+  photo: string | null;
+  isHabilitado: number;
+  position: string;
+  idTeam: number | null;
+
+  teamId: number | null;
+  teamName: string | null;
+  teamAbreviatura: string | null;
+  teamIdLogo: number | null;
+  teamUserId: number | null;
+};
+
+type TeamPayload = {
+  id: number;
+  name: string;
+  abreviatura: string;
+  idLogo: number | null;
+  userId: number | null;
+  logo: any | null;
+};
+
+type PlayerWithTeamPayload = {
+  id: number;
+  name: string;
+  lastName: string;
+  valoration: number;
+  photo: string | null;
+  isHabilitado: number;
+  position: string;
+  fullName: string;
+  team: TeamPayload | null;
+};
 
 @Injectable()
 export class PlayerService {
@@ -14,6 +52,7 @@ export class PlayerService {
     @InjectRepository(Team)
     private readonly teamRepository: Repository<Team>,
     private readonly imageService: ImagesService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async createPlayer(player: any) {
@@ -260,17 +299,13 @@ export class PlayerService {
     }
   }
 
-  async getPlayersWithTeams() {
-    const apiResponse = new ApiResponse<any[]>();
+  async getPlayersWithTeams(): Promise<ApiResponse<PlayerWithTeamPayload[]>> {
+    const apiResponse = new ApiResponse<PlayerWithTeamPayload[]>();
 
     try {
-      const players = await this.playerRepository.find({
-        where: { isTransfer: true },
-        relations: ['team'],
-        order: { valoration: 'DESC' },
-      });
+      const rows = await this.fetchPlayersWithTeams();
 
-      if (!players?.length) {
+      if (rows.length === 0) {
         return {
           ...apiResponse,
           data: [],
@@ -279,44 +314,14 @@ export class PlayerService {
         };
       }
 
-      const playersWithTeam = await Promise.all(
-        players.map(async (player) => {
-          const {
-            id,
-            name,
-            lastName,
-            valoration,
-            photo,
-            isHabilitado,
-            position,
-            team,
-          } = player;
+      const getTeamLogo = this.createLogoCacheLoader();
 
-          const teamWithLogo = team
-            ? { ...team, logo: await this.imageService.getImage(team.idLogo) }
-            : null;
-
-          return {
-            id,
-            name,
-            lastName,
-            valoration,
-            photo,
-            isHabilitado,
-            position,
-            fullName: `${name} ${lastName}`,
-            team: teamWithLogo,
-          };
-        }),
+      const data = await Promise.all(
+        rows.map((row) => this.mapRowToPayload(row, getTeamLogo)),
       );
 
-      return {
-        ...apiResponse,
-        data: playersWithTeam,
-        httpCode: HttpStatus.OK,
-        message: '',
-      };
-    } catch (error) {
+      return { ...apiResponse, data, httpCode: HttpStatus.OK, message: '' };
+    } catch (error: any) {
       return {
         ...apiResponse,
         data: null,
@@ -324,6 +329,95 @@ export class PlayerService {
         message: `Error al cargar jugadores con equipos: ${error.message}`,
       };
     }
+  }
+
+  // -------------------------
+  // Data access
+  // -------------------------
+  private async fetchPlayersWithTeams(): Promise<PlayerTeamRow[]> {
+    return this.dataSource.query(
+      `
+      SELECT
+        p.id,
+        p.name,
+        p.lastName,
+        p.valoration,
+        p.photo,
+        p.isHabilitado,
+        p.position,
+        p.idTeam,
+
+        t.id           AS teamId,
+        t.name         AS teamName,
+        t.abreviatura  AS teamAbreviatura,
+        t.idLogo       AS teamIdLogo,
+        t.userId       AS teamUserId
+      FROM players p
+      LEFT JOIN teams t ON t.id = p.idTeam
+      WHERE p.isTransfer = 1
+      ORDER BY p.valoration DESC, p.id ASC
+      `,
+    );
+  }
+
+  // -------------------------
+  // Logo loader with cache
+  // -------------------------
+  private createLogoCacheLoader() {
+    const cache = new Map<number, any>();
+
+    return async (idLogo: number | null | undefined) => {
+      if (idLogo === null || idLogo === undefined) return null;
+
+      const key = Number(idLogo);
+      if (!Number.isFinite(key) || key <= 0) return null;
+
+      if (cache.has(key)) return cache.get(key);
+
+      const logo = await this.imageService.getImage(key);
+      cache.set(key, logo);
+      return logo ?? null;
+    };
+  }
+
+  // -------------------------
+  // Mapping
+  // -------------------------
+  private async mapRowToPayload(
+    row: PlayerTeamRow,
+    getTeamLogo: (idLogo: number | null | undefined) => Promise<any | null>,
+  ): Promise<PlayerWithTeamPayload> {
+    const team = await this.mapTeam(row, getTeamLogo);
+
+    return {
+      id: Number(row.id),
+      name: row.name,
+      lastName: row.lastName,
+      valoration: Number(row.valoration),
+      photo: row.photo ?? null,
+      isHabilitado: Number(row.isHabilitado),
+      position: row.position,
+      fullName: `${row.name} ${row.lastName}`,
+      team,
+    };
+  }
+
+  private async mapTeam(
+    row: PlayerTeamRow,
+    getTeamLogo: (idLogo: number | null | undefined) => Promise<any | null>,
+  ): Promise<TeamPayload | null> {
+    if (row.teamId === null || row.teamId === undefined) return null;
+
+    const idLogo = row.teamIdLogo !== null ? Number(row.teamIdLogo) : null;
+
+    return {
+      id: Number(row.teamId),
+      name: row.teamName ?? '',
+      abreviatura: row.teamAbreviatura ?? '',
+      idLogo,
+      userId: row.teamUserId !== null ? Number(row.teamUserId) : null,
+      logo: await getTeamLogo(idLogo),
+    };
   }
 
   async assignPlayerTransfer(id: number, isTransfer: boolean) {

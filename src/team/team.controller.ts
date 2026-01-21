@@ -24,11 +24,6 @@ export class TeamController {
     return this.teamService.getTeams();
   }
 
-  @Get('draft')
-  draft(@Body() teams: []) {
-    return this.teamService.distributePlayersEqually(teams);
-  }
-
   @Get(':id')
   getTeamsByID(@Param('id', ParseIntPipe) id: number) {
     return this.teamService.getTeamByID(id);
