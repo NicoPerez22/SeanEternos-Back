@@ -19,7 +19,10 @@ import { PlayerModule } from './player/player.module';
     TeamModule,
     UploadModule,
     PlayerModule,
-    ConfigModule.forRoot(),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env',
+    }),
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: process.env.MYSQLHOST,
