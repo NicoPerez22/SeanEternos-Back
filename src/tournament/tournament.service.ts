@@ -15,6 +15,7 @@ import { FormatTournament } from 'src/team/entity/format.entity';
 import { Image } from 'src/upload/entity/image.entity';
 import { DataSource } from 'typeorm';
 import { CreateTournamentDto } from './dto/tournament.dto';
+import { ImagesService } from 'shared/services/images/images.service';
 
 type Player = { id: number; valoration: number; position: string };
 type Assignment = { teamId: number; playerId: number };
@@ -67,6 +68,40 @@ const getGroupKey = (pos: string): string | null => {
   return null;
 };
 
+type PaginationSP = {
+  totalItems: number;
+  totalPages: number;
+  page: number;
+  perPage: number;
+  formatId: number; // 1 KO, 2 Grupos, 3 Liga
+  unitType: 'matchday' | 'round';
+  unitValue: number | null; // matchday o round actual
+};
+
+type RoundRow = {
+  idRound: number;
+  tournamentId: number;
+  matchday: number | null;
+  groupNumber: number | null;
+  round: number | null;
+  state: number;
+
+  homeTeamId: number;
+  homeTeamName: string;
+  homeIdLogo: number | null;
+
+  awayTeamId: number;
+  awayTeamName: string;
+  awayIdLogo: number | null;
+
+  homeGoals: number | null;
+  awayGoals: number | null;
+
+  // si tu SP devuelve urls ya armadas, agregalas:
+  homeLogoUrl?: string | null;
+  awayLogoUrl?: string | null;
+};
+
 @Injectable()
 export class TournamentService {
   private teams: string[] = [];
@@ -88,6 +123,7 @@ export class TournamentService {
     @InjectRepository(Image)
     private readonly imageRepository: Repository<Image>,
     private readonly dataSource: DataSource,
+    private readonly imageService: ImagesService,
   ) {}
 
   // -----------------------------------------------------
@@ -206,22 +242,45 @@ export class TournamentService {
   // GET TOURNAMENT BY ID (con logos y rounds mergeados)
   // -----------------------------------------------------
   async getTournamentById(id: number) {
-    const tournamentFound = await this.tournamentRepository.findOne({
-      where: { id },
-      relations: ['format'],
-    });
+    const apiResponse = new ApiResponse<any[]>();
 
-    if (!tournamentFound) {
-      throw new HttpException('El torneo no existe', HttpStatus.NOT_FOUND);
+    try {
+      const tournamentFound = await this.tournamentRepository.findOne({
+        where: { id },
+        relations: ['format'],
+      });
+
+      if (!tournamentFound) {
+        return {
+          ...apiResponse,
+          data: null,
+          httpCode: HttpStatus.OK,
+          message: 'No existen torneos',
+        };
+      }
+
+      const resp = {
+        httpCode: HttpStatus.OK,
+        name: tournamentFound.name,
+        logo: tournamentFound.logo,
+        format: tournamentFound.format,
+        statistics: tournamentFound.statistics,
+      };
+
+      return {
+        ...apiResponse,
+        data: resp,
+        httpCode: HttpStatus.OK,
+        message: '',
+      };
+    } catch (error) {
+      return {
+        ...apiResponse,
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al cargar los torneos: ${error.message}`,
+      };
     }
-
-    return {
-      httpCode: HttpStatus.OK,
-      name: tournamentFound.name,
-      logo: tournamentFound.logo,
-      format: tournamentFound.format,
-      statistics: tournamentFound.statistics,
-    };
   }
 
   // -----------------------------------------------------
@@ -345,16 +404,89 @@ export class TournamentService {
     return this.imageRepository.findOne({ where: { id: idLogo } });
   }
 
-  async getRoundsPaginated(tournamentId: number, page: number, limit: number) {
-    const result = await this.dataSource.query(
-      `CALL sp_get_tournament_rounds_paginated_pro(?, ?, ?)`,
-      [tournamentId, page, limit],
-    );
+  async getRoundsPaginated(tournamentId: number, page: number) {
+    const apiResponse = new ApiResponse<any>();
 
-    return {
-      pagination: result[0][0],
-      rounds: result[1],
-    };
+    try {
+      const result = await this.dataSource.query(
+        `CALL sp_get_tournament_rounds_by_matchday_paginated(?, ?)`,
+        [tournamentId, page],
+      );
+
+      const pagination = result?.[0]?.[0] ?? null;
+      const rows = (result?.[1] ?? []).filter((r) => r?.idRound != null);
+
+      if (!pagination) {
+        return {
+          ...apiResponse,
+          httpCode: HttpStatus.OK,
+          message: 'No hay rounds para este torneo',
+          data: { pagination: null, rounds: [], groups: [] },
+        };
+      }
+
+      const resolveLogoUrl = this.createLogoUrlResolver();
+
+      // Enriquecemos cada partido con URLs
+      const roundsWithLogoUrl = await Promise.all(
+        rows.map(async (r) => ({
+          ...r,
+          homeLogoUrl:
+            r.homeLogoUrl ?? (await resolveLogoUrl(r.homeIdLogo)) ?? null,
+          awayLogoUrl:
+            r.awayLogoUrl ?? (await resolveLogoUrl(r.awayIdLogo)) ?? null,
+        })),
+      );
+
+      // Formato GRUPOS => separar por grupo
+      if (pagination.formatId === 2) {
+        const groupsMap = new Map<number, any[]>();
+
+        for (const r of roundsWithLogoUrl) {
+          const group = r.groupNumber ?? 0;
+          if (!groupsMap.has(group)) groupsMap.set(group, []);
+          groupsMap.get(group)!.push(r);
+        }
+
+        const groups = [...groupsMap.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([groupNumber, rounds]) => ({ groupNumber, rounds }));
+
+        return {
+          ...apiResponse,
+          httpCode: HttpStatus.OK,
+          message: '',
+          data: {
+            pagination,
+            formatId: pagination.formatId,
+            unitType: pagination.unitType,
+            unitValue: pagination.unitValue,
+            groups, // ✅ por grupo
+          },
+        };
+      }
+
+      // Liga / KO => rounds plano
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: '',
+        data: {
+          pagination,
+          formatId: pagination.formatId,
+          unitType: pagination.unitType,
+          unitValue: pagination.unitValue,
+          rounds: roundsWithLogoUrl,
+        },
+      };
+    } catch (error: any) {
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al cargar rounds: ${error.message}`,
+        data: null,
+      };
+    }
   }
 
   async saveMatchReport(dto: any) {
@@ -889,5 +1021,25 @@ export class TournamentService {
         values,
       );
     }
+  }
+
+  private createLogoUrlResolver() {
+    const cache = new Map<number, string | null>();
+
+    return async (
+      idLogo: number | null | undefined,
+    ): Promise<string | null> => {
+      if (idLogo === null || idLogo === undefined) return null;
+
+      const key = Number(idLogo);
+      if (!Number.isFinite(key) || key <= 0) return null;
+
+      if (cache.has(key)) return cache.get(key)!;
+
+      const img = await this.imageService.getImage(key);
+      const url = img?.secureUrl ?? null; // 👈 ajustá según tu ImageService
+      cache.set(key, url);
+      return url;
+    };
   }
 }

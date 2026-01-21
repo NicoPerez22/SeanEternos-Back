@@ -46,13 +46,12 @@ export class TournamentController {
     return this.tournamentService.getHighlights(tournamentId);
   }
 
-  @Get(':id/:page/:limit')
+  @Get(':id/:page')
   getRoundsPagination(
     @Param('id') tournamentId: number,
     @Param('page') page: number,
-    @Param('limit') limit: number,
   ) {
-    return this.tournamentService.getRoundsPaginated(tournamentId, page, limit);
+    return this.tournamentService.getRoundsPaginated(tournamentId, page);
   }
 
   @Post('/report')
