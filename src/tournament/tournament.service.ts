@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -194,6 +195,77 @@ export class TournamentService {
     };
   }
 
+  async removeTournament(tournamentId: number) {
+    const qr: QueryRunner = this.dataSource.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+
+    try {
+      // Existe torneo?
+      const exists = await qr.query(
+        `SELECT id FROM tournament WHERE id = ? LIMIT 1`,
+        [tournamentId],
+      );
+      if (!exists?.length) throw new NotFoundException('Torneo no encontrado');
+
+      // 1) match_events (depende de match_reports)
+      await qr.query(
+        `
+        DELETE me
+        FROM match_events me
+        JOIN match_reports mr ON mr.id = me.reportId
+        WHERE mr.tournamentId = ?
+        `,
+        [tournamentId],
+      );
+
+      // 2) match_reports (depende de rounds y torneo)
+      await qr.query(`DELETE FROM match_reports WHERE tournamentId = ?`, [
+        tournamentId,
+      ]);
+
+      // 3) transfers / transfer_offers si guardan tournamentId (si no tienen, sacalo)
+      // Si tu transfers tiene tournamentId:
+      // await qr.query(`DELETE FROM transfers WHERE tournamentId = ?`, [tournamentId]);
+
+      // Si tu transfer_offers tiene tournamentId:
+      // await qr.query(`DELETE FROM transfer_offers WHERE tournamentId = ?`, [tournamentId]);
+
+      // 4) tournament_teams
+      await qr.query(`DELETE FROM tournament_teams WHERE tournamentId = ?`, [
+        tournamentId,
+      ]);
+
+      // 5) rounds (la FK que te está bloqueando)
+      await qr.query(`DELETE FROM rounds WHERE tournamentId = ?`, [
+        tournamentId,
+      ]);
+
+      // 6) tournament_statistics (si existe por tournamentId)
+      await qr.query(
+        `DELETE FROM tournament_statistics WHERE tournamentId = ?`,
+        [tournamentId],
+      );
+
+      // 7) Finalmente el torneo
+      const del: any = await qr.query(`DELETE FROM tournament WHERE id = ?`, [
+        tournamentId,
+      ]);
+
+      const affected = Number(del?.affectedRows ?? 0);
+      if (!affected)
+        throw new BadRequestException('No se pudo eliminar el torneo');
+
+      await qr.commitTransaction();
+      return { ok: true, message: 'Torneo eliminado', tournamentId };
+    } catch (e) {
+      await qr.rollbackTransaction();
+      throw e;
+    } finally {
+      await qr.release();
+    }
+  }
+
   // -----------------------------------------------------
   // GET ALL TOURNAMENTS
   // -----------------------------------------------------
@@ -301,49 +373,201 @@ export class TournamentService {
   // -----------------------------------------------------
   // RANKING (same view but lighter)
   // -----------------------------------------------------
-  async getRanking(tournamentId: number) {
-    const apiResponse = new ApiResponse<any[]>();
+  async getRankingLeague(tournamentId: number) {
+    const apiResponse = new ApiResponse<any>();
 
-    const result: any = await this.dataSource.query(
+    const rows: any[] = await this.dataSource.query(
       `
-        SELECT 
-            t.id AS teamId,
-            t.name AS teamName,
+    WITH played_home AS (
+      SELECT r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga
+      FROM rounds r
+      WHERE r.tournamentId = ?
+        AND r.state = 1
+        AND r.homeGoals IS NOT NULL
+        AND r.awayGoals IS NOT NULL
+    ),
+    played_away AS (
+      SELECT r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga
+      FROM rounds r
+      WHERE r.tournamentId = ?
+        AND r.state = 1
+        AND r.homeGoals IS NOT NULL
+        AND r.awayGoals IS NOT NULL
+    ),
+    all_rows AS (
+      SELECT * FROM played_home
+      UNION ALL
+      SELECT * FROM played_away
+    ),
+    stats AS (
+      SELECT
+        teamId,
+        COUNT(*) AS matchesPlayed,
+        SUM(CASE WHEN gf > ga THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN gf = ga THEN 1 ELSE 0 END) AS draws,
+        SUM(CASE WHEN gf < ga THEN 1 ELSE 0 END) AS losses,
+        SUM(gf) AS goalsFor,
+        SUM(ga) AS goalsAgainst,
+        SUM(gf - ga) AS goalDifference,
+        SUM(CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END) AS points
+      FROM all_rows
+      GROUP BY teamId
+    )
+    SELECT
+      t.id AS teamId,
+      t.name AS teamName,
 
-            -- LOGO
-            img.secureUrl AS logoUrl,
-            img.publicId AS logoPublicId,
-            img.originalName AS logoOriginalName,
+      img.secureUrl AS logoUrl,
+      img.publicId AS logoPublicId,
+      img.originalName AS logoOriginalName,
 
-            -- ESTADÍSTICAS
-            COALESCE(ts.points, 0) AS points,
-            COALESCE(ts.goalDifference, 0) AS goalDifference,
-            COALESCE(ts.goalsFor, 0) AS goalsFor,
-            COALESCE(ts.goalsAgainst, 0) AS goalsAgainst,
-            COALESCE(ts.matchesPlayed, 0) AS matchesPlayed,
-            COALESCE(ts.wins, 0) AS wins,
-            COALESCE(ts.draws, 0) AS draws,
-            COALESCE(ts.losses, 0) AS losses
+      COALESCE(s.points, 0) AS points,
+      COALESCE(s.goalDifference, 0) AS goalDifference,
+      COALESCE(s.goalsFor, 0) AS goalsFor,
+      COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
+      COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
+      COALESCE(s.wins, 0) AS wins,
+      COALESCE(s.draws, 0) AS draws,
+      COALESCE(s.losses, 0) AS losses
+    FROM tournament_teams tt
+    JOIN teams t ON t.id = tt.teamsId
+    LEFT JOIN image img ON img.id = t.idLogo
+    LEFT JOIN stats s ON s.teamId = t.id
+    WHERE tt.tournamentId = ?
+    ORDER BY points DESC, goalDifference DESC, goalsFor DESC, teamName ASC;
+    `,
+      [tournamentId, tournamentId, tournamentId],
+    );
 
-        FROM tournament_teams tt
-        JOIN teams t ON t.id = tt.teamsId
+    const tables = [
+      {
+        groupNumber: null,
+        groupName: 'General',
+        rows,
+      },
+    ];
 
-        -- LOGO DEL EQUIPO
-        LEFT JOIN image img ON img.id = t.idLogo
+    return Object.assign(apiResponse, {
+      data: { tables },
+      httpCode: HttpStatus.OK,
+      message: '',
+    });
+  }
 
-        -- ESTADÍSTICAS
-        LEFT JOIN team_statistics ts 
-            ON ts.teamId = t.id 
-            AND ts.tournamentId = ?
+  async getRankingGroups(tournamentId: number) {
+    const apiResponse = new ApiResponse<any>();
 
-        WHERE tt.tournamentId = ?
-        ORDER BY points DESC, goalDifference DESC, goalsFor DESC;
-      `,
-      [tournamentId, tournamentId],
+    const flatRows: any[] = await this.dataSource.query(
+      `
+    WITH teams_in_group AS (
+      SELECT DISTINCT r.groupNumber AS groupNumber, r.home AS teamId
+      FROM rounds r
+      WHERE r.tournamentId = ? AND r.groupNumber IS NOT NULL
+
+      UNION DISTINCT
+
+      SELECT DISTINCT r.groupNumber AS groupNumber, r.away AS teamId
+      FROM rounds r
+      WHERE r.tournamentId = ? AND r.groupNumber IS NOT NULL
+    ),
+    played AS (
+      SELECT r.groupNumber AS groupNumber, r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga
+      FROM rounds r
+      WHERE r.tournamentId = ?
+        AND r.groupNumber IS NOT NULL
+        AND r.state = 1
+        AND r.homeGoals IS NOT NULL
+        AND r.awayGoals IS NOT NULL
+
+      UNION ALL
+
+      SELECT r.groupNumber AS groupNumber, r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga
+      FROM rounds r
+      WHERE r.tournamentId = ?
+        AND r.groupNumber IS NOT NULL
+        AND r.state = 1
+        AND r.homeGoals IS NOT NULL
+        AND r.awayGoals IS NOT NULL
+    ),
+    stats AS (
+      SELECT
+        groupNumber,
+        teamId,
+        COUNT(*) AS matchesPlayed,
+        SUM(CASE WHEN gf > ga THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN gf = ga THEN 1 ELSE 0 END) AS draws,
+        SUM(CASE WHEN gf < ga THEN 1 ELSE 0 END) AS losses,
+        SUM(gf) AS goalsFor,
+        SUM(ga) AS goalsAgainst,
+        SUM(gf - ga) AS goalDifference,
+        SUM(CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END) AS points
+      FROM played
+      GROUP BY groupNumber, teamId
+    )
+    SELECT
+      tig.groupNumber AS groupNumber,
+      CONCAT('Grupo ', tig.groupNumber) AS groupName,
+
+      t.id AS teamId,
+      t.name AS teamName,
+
+      img.secureUrl AS logoUrl,
+      img.publicId AS logoPublicId,
+      img.originalName AS logoOriginalName,
+
+      COALESCE(s.points, 0) AS points,
+      COALESCE(s.goalDifference, 0) AS goalDifference,
+      COALESCE(s.goalsFor, 0) AS goalsFor,
+      COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
+      COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
+      COALESCE(s.wins, 0) AS wins,
+      COALESCE(s.draws, 0) AS draws,
+      COALESCE(s.losses, 0) AS losses
+    FROM teams_in_group tig
+    JOIN teams t ON t.id = tig.teamId
+    LEFT JOIN image img ON img.id = t.idLogo
+    LEFT JOIN stats s ON s.groupNumber = tig.groupNumber AND s.teamId = tig.teamId
+    ORDER BY tig.groupNumber ASC, points DESC, goalDifference DESC, goalsFor DESC, teamName ASC;
+    `,
+      [tournamentId, tournamentId, tournamentId, tournamentId],
+    );
+
+    const map = new Map<
+      number,
+      { groupNumber: number; groupName: string; rows: any[] }
+    >();
+
+    for (const r of flatRows) {
+      if (!map.has(r.groupNumber)) {
+        map.set(r.groupNumber, {
+          groupNumber: r.groupNumber,
+          groupName: r.groupName,
+          rows: [],
+        });
+      }
+      map.get(r.groupNumber)!.rows.push({
+        teamId: r.teamId,
+        teamName: r.teamName,
+        logoUrl: r.logoUrl,
+        logoPublicId: r.logoPublicId,
+        logoOriginalName: r.logoOriginalName,
+        points: r.points,
+        goalDifference: r.goalDifference,
+        goalsFor: r.goalsFor,
+        goalsAgainst: r.goalsAgainst,
+        matchesPlayed: r.matchesPlayed,
+        wins: r.wins,
+        draws: r.draws,
+        losses: r.losses,
+      });
+    }
+
+    const tables = Array.from(map.values()).sort(
+      (a, b) => a.groupNumber - b.groupNumber,
     );
 
     return Object.assign(apiResponse, {
-      data: result,
+      data: { tables },
       httpCode: HttpStatus.OK,
       message: '',
     });
@@ -421,7 +645,13 @@ export class TournamentService {
           ...apiResponse,
           httpCode: HttpStatus.OK,
           message: 'No hay rounds para este torneo',
-          data: { pagination: null, rounds: [], groups: [] },
+          data: {
+            pagination: null,
+            formatId: null,
+            unitType: null,
+            unitValue: null,
+            groups: [],
+          },
         };
       }
 
@@ -438,35 +668,27 @@ export class TournamentService {
         })),
       );
 
-      // Formato GRUPOS => separar por grupo
+      // ✅ SIEMPRE devolvemos groups
+      let groups: Array<{ groupNumber: number | null; rounds: any[] }> = [];
+
       if (pagination.formatId === 2) {
+        // Formato GRUPOS => separar por groupNumber
         const groupsMap = new Map<number, any[]>();
 
         for (const r of roundsWithLogoUrl) {
-          const group = r.groupNumber ?? 0;
-          if (!groupsMap.has(group)) groupsMap.set(group, []);
-          groupsMap.get(group)!.push(r);
+          const groupNumber = r.groupNumber ?? 0;
+          if (!groupsMap.has(groupNumber)) groupsMap.set(groupNumber, []);
+          groupsMap.get(groupNumber)!.push(r);
         }
 
-        const groups = [...groupsMap.entries()]
+        groups = [...groupsMap.entries()]
           .sort(([a], [b]) => a - b)
           .map(([groupNumber, rounds]) => ({ groupNumber, rounds }));
-
-        return {
-          ...apiResponse,
-          httpCode: HttpStatus.OK,
-          message: '',
-          data: {
-            pagination,
-            formatId: pagination.formatId,
-            unitType: pagination.unitType,
-            unitValue: pagination.unitValue,
-            groups, // ✅ por grupo
-          },
-        };
+      } else {
+        // Liga / KO => un solo grupo “General”
+        groups = [{ groupNumber: null, rounds: roundsWithLogoUrl }];
       }
 
-      // Liga / KO => rounds plano
       return {
         ...apiResponse,
         httpCode: HttpStatus.OK,
@@ -476,7 +698,7 @@ export class TournamentService {
           formatId: pagination.formatId,
           unitType: pagination.unitType,
           unitValue: pagination.unitValue,
-          rounds: roundsWithLogoUrl,
+          groups, // ✅ siempre presente
         },
       };
     } catch (error: any) {

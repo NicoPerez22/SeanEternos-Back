@@ -1,5 +1,5 @@
 import { TournamentService } from './tournament.service';
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post } from '@nestjs/common';
 import { CreateTournamentDto } from './dto/tournament.dto';
 
 @Controller('tournament')
@@ -26,6 +26,11 @@ export class TournamentController {
     return await this.tournamentService.getTournamentById(id);
   }
 
+  @Delete('delete/:id')
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.tournamentService.removeTournament(id);
+  }
+
   @Get(':id/standings')
   getStandings(@Param('id') tournamentId: number) {
     return this.tournamentService.getStandings(tournamentId);
@@ -38,7 +43,12 @@ export class TournamentController {
 
   @Get(':id/ranking')
   getRanking(@Param('id') tournamentId: number) {
-    return this.tournamentService.getRanking(tournamentId);
+    return this.tournamentService.getRankingLeague(tournamentId);
+  }
+
+  @Get(':id/groups')
+  getRankingGroups(@Param('id') tournamentId: number) {
+    return this.tournamentService.getRankingGroups(tournamentId);
   }
 
   @Get(':id/highlights')
