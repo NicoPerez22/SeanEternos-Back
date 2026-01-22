@@ -3,7 +3,18 @@ import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { cors: true });
+  const app = await NestFactory.create(AppModule);
+
+  app.enableCors({
+    origin: [
+      'http://localhost:4200',
+      'http://localhost:5173',
+      'https://TU-FRONTEND.com',
+    ],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  });
 
   const options = new DocumentBuilder()
     .setTitle('API - Sean Eternos')
@@ -13,6 +24,7 @@ async function bootstrap() {
   SwaggerModule.setup('api', app, document);
 
   app.setGlobalPrefix('api/v1');
-  await app.listen(process.env.PORT ?? 3000);
+  const port = Number(process.env.PORT) || 3000;
+  await app.listen(port, '0.0.0.0');
 }
 bootstrap();
