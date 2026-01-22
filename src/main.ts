@@ -12,8 +12,9 @@ async function bootstrap() {
       'https://blueviolet-dunlin-800160.hostingersite.com/',
     ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'authorization'],
+    exposedHeaders: ['Authorization'],
+    credentials: false, // JWT en header => no necesitás cookies
   });
 
   // const options = new DocumentBuilder()
