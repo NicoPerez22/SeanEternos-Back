@@ -1,10 +1,19 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpStatus,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Player } from './entity/player.entity';
 import { ApiResponse } from 'shared/models/apiResponse';
 import { Team } from 'src/team/entity/team.entity';
 import { ImagesService } from 'shared/services/images/images.service';
+import {
+  CreateTransferOfferDto,
+  ReviewTransferOfferDto,
+} from './dto/transferOffert';
 
 type PlayerTeamRow = {
   id: number;
@@ -512,5 +521,223 @@ export class PlayerService {
         message: `Error al cargar los jugadores: ${error.message}`,
       };
     }
+  }
+
+  async createOffer(dto: CreateTransferOfferDto) {
+    try {
+      const note = dto.note ?? null;
+
+      // TypeORM MySQL devuelve arrays por cada resultset
+      const result = await this.dataSource.query(
+        `CALL sp_create_transfer_offer(?, ?, ?, ?)`,
+        [dto.fromTeamId, dto.targetPlayerId, dto.offeredPlayerId, note],
+      );
+
+      // En MySQL suele venir: [ [rows], [proc metadata], ...]
+      const rows = Array.isArray(result?.[0]) ? result[0] : result;
+      const row = rows?.[0];
+
+      if (!row?.offerId) {
+        // Por si el driver devuelve distinto
+        return { ok: true, data: rows };
+      }
+
+      return { ok: true, data: row };
+    } catch (err: any) {
+      this.handleMysqlSpError(err);
+    }
+  }
+
+  async reviewOffer(
+    offerId: number,
+    adminId: number,
+    dto: ReviewTransferOfferDto,
+  ) {
+    try {
+      const reviewNote = dto.reviewNote ?? null;
+
+      const result = await this.dataSource.query(
+        `CALL sp_review_transfer_offer(?, ?, ?, ?)`,
+        [offerId, adminId, dto.action, reviewNote],
+      );
+
+      const rows = Array.isArray(result?.[0]) ? result[0] : result;
+      const row = rows?.[0];
+
+      return { ok: true, data: row ?? rows };
+    } catch (err: any) {
+      this.handleMysqlSpError(err);
+    }
+  }
+
+async listPending(page = 1, limit = 20) {
+  const safeLimit = Math.min(Math.max(limit, 1), 100);
+  const safePage = Math.max(page, 1);
+  const offset = (safePage - 1) * safeLimit;
+
+  const where = `o.status = 'pending'`;
+  const params: any[] = [];
+
+  // Total (para paginado)
+  const totalRows = await this.dataSource.query(
+    `SELECT COUNT(*) AS total
+     FROM transfer_offers o
+     WHERE ${where}`,
+    params,
+  );
+  const total = Number(totalRows?.[0]?.total ?? 0);
+
+  const rows = await this.dataSource.query(
+    `SELECT
+      o.id,
+      o.status,
+      CASE o.status
+        WHEN 'pending'   THEN 'Pendiente'
+        WHEN 'approved'  THEN 'Aprobada'
+        WHEN 'rejected'  THEN 'Rechazada'
+        WHEN 'cancelled' THEN 'Cancelada'
+        ELSE o.status
+      END AS statusEs,
+
+      o.fromTeamId,
+      tf.name AS fromTeamName,
+      imgFrom.secureUrl AS fromTeamLogoUrl,
+
+      o.toTeamId,
+      tt.name AS toTeamName,
+      imgTo.secureUrl AS toTeamLogoUrl,
+
+      o.targetPlayerId,
+      pTarget.name     AS targetPlayerName,
+      pTarget.lastname AS targetPlayerLastname,
+
+      o.offeredPlayerId,
+      pOffer.name      AS offeredPlayerName,
+      pOffer.lastname  AS offeredPlayerLastname
+
+    FROM transfer_offers o
+    LEFT JOIN teams tf ON tf.id = o.fromTeamId
+    LEFT JOIN teams tt ON tt.id = o.toTeamId
+
+    LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
+    LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
+
+    LEFT JOIN players pTarget ON pTarget.id = o.targetPlayerId
+    LEFT JOIN players pOffer  ON pOffer.id  = o.offeredPlayerId
+
+    WHERE ${where}
+    ORDER BY o.createdAt DESC
+    LIMIT ? OFFSET ?`,
+    [...params, safeLimit, offset],
+  );
+
+  return {
+    ok: true,
+    data: rows,
+  };
+}
+
+  private handleMysqlSpError(err: any): never {
+    const sqlState = err?.sqlState;
+    const message = err?.sqlMessage || err?.message || 'Database error';
+
+    if (sqlState === '45000') {
+      throw new BadRequestException(message);
+    }
+
+    // errores comunes de constraint / FK / etc.
+    if (err?.code) {
+      throw new BadRequestException(`${err.code}: ${message}`);
+    }
+
+    throw new InternalServerErrorException(message);
+  }
+
+  async getOffersByTeam(
+    teamId: number,
+    status?: 'pending' | 'approved' | 'rejected' | 'cancelled',
+    page = 1,
+    limit = 20,
+  ) {
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const safePage = Math.max(page, 1);
+    const offset = (safePage - 1) * safeLimit;
+
+    const allowed = new Set(['pending', 'approved', 'rejected', 'cancelled']);
+    if (status && !allowed.has(status)) {
+      throw new BadRequestException('status inválido');
+    }
+
+    let where = `(o.fromTeamId = ? OR o.toTeamId = ?)`;
+    const params: any[] = [teamId, teamId];
+
+    if (status) {
+      where += ` AND o.status = ?`;
+      params.push(status);
+    }
+
+    const totalRows = await this.dataSource.query(
+      `SELECT COUNT(*) AS total
+     FROM transfer_offers o
+     WHERE ${where}`,
+      params,
+    );
+    const total = Number(totalRows?.[0]?.total ?? 0);
+
+    const rows = await this.dataSource.query(
+      `SELECT
+        o.id,
+        o.status,
+        CASE o.status
+          WHEN 'pending'   THEN 'Pendiente'
+          WHEN 'approved'  THEN 'Aprobada'
+          WHEN 'rejected'  THEN 'Rechazada'
+          WHEN 'cancelled' THEN 'Cancelada'
+          ELSE o.status
+        END AS statusEs,
+
+        o.fromTeamId,
+        tf.name AS fromTeamName,
+        imgFrom.secureUrl AS fromTeamLogoUrl,
+
+        o.toTeamId,
+        tt.name AS toTeamName,
+        imgTo.secureUrl AS toTeamLogoUrl,
+
+        o.targetPlayerId,
+        pTarget.name     AS targetPlayerName,
+        pTarget.lastname AS targetPlayerLastname,
+
+        o.offeredPlayerId,
+        pOffer.name      AS offeredPlayerName,
+        pOffer.lastname  AS offeredPlayerLastname
+
+      FROM transfer_offers o
+      LEFT JOIN teams tf ON tf.id = o.fromTeamId
+      LEFT JOIN teams tt ON tt.id = o.toTeamId
+
+      LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
+      LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
+
+      LEFT JOIN players pTarget ON pTarget.id = o.targetPlayerId
+      LEFT JOIN players pOffer  ON pOffer.id  = o.offeredPlayerId
+
+      WHERE ${where}
+      ORDER BY o.createdAt DESC
+      LIMIT ? OFFSET ?`,
+      [...params, safeLimit, offset],
+    );
+
+    return {
+      ok: true,
+      meta: {
+        teamId,
+        status: status ?? null,
+        page: safePage,
+        limit: safeLimit,
+        total,
+      },
+      data: rows,
+    };
   }
 }

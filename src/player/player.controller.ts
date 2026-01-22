@@ -7,12 +7,22 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { PlayerService } from './player.service';
+import {
+  CreateTransferOfferDto,
+  ReviewTransferOfferDto,
+} from './dto/transferOffert';
 
 @Controller('player')
 export class PlayerController {
   constructor(private readonly playerService: PlayerService) {}
+
+  @Post('transfer/offers')
+  create(@Body() dto: CreateTransferOfferDto) {
+    return this.playerService.createOffer(dto);
+  }
 
   @Get('')
   getPlayers() {
@@ -64,5 +74,37 @@ export class PlayerController {
   @Get('disabled')
   disablePlayers() {
     return this.playerService.disabledPlayers();
+  }
+
+  @Post(':id/:idAdmin/review')
+  review(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('idAdmin', ParseIntPipe) adminId: number,
+    @Body() dto: ReviewTransferOfferDto,
+  ) {
+    return this.playerService.reviewOffer(id, adminId, dto);
+  }
+
+  @Get('pending')
+  pending(@Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.playerService.listPending(
+      Number(page ?? 1),
+      Number(limit ?? 20),
+    );
+  }
+
+  @Get('transfer/offers/team/:teamId')
+  getOffersByTeam(
+    @Param('teamId', ParseIntPipe) teamId: number,
+    @Query('status') status?: 'pending' | 'approved' | 'rejected' | 'cancelled',
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.playerService.getOffersByTeam(
+      teamId,
+      status,
+      Number(page ?? 1),
+      Number(limit ?? 20),
+    );
   }
 }
