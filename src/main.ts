@@ -6,15 +6,18 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: [
-      'http://localhost:4200',
-      'http://localhost:5173',
-      'https://blueviolet-dunlin-800160.hostingersite.com/',
-    ],
+    origin: true, // refleja el Origin que llega
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'authorization'],
-    exposedHeaders: ['Authorization'],
-    credentials: false, // JWT en header => no necesitás cookies
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+    ],
+    credentials: false,
+    optionsSuccessStatus: 204,
   });
 
   // const options = new DocumentBuilder()
