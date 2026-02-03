@@ -1,5 +1,13 @@
 import { TournamentService } from './tournament.service';
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+} from '@nestjs/common';
 import { CreateTournamentDto } from './dto/tournament.dto';
 
 @Controller('tournament')
@@ -77,5 +85,10 @@ export class TournamentController {
   @Get(':id/status')
   getStatusDraft(@Param('id') tournamentId: number) {
     return this.tournamentService.getDraftStatus(tournamentId);
+  }
+
+  @Get(':roundId/teams')
+  getTeamsByRound(@Param('roundId', ParseIntPipe) roundId: number) {
+    return this.tournamentService.getTeamsByRound(roundId);
   }
 }

@@ -142,12 +142,14 @@ export class TeamService {
           homeLogo: await getLogoCached(
             r.homeIdLogo ? Number(r.homeIdLogo) : null,
           ),
+          // homeGoals: r.homeGoals !== null ? Number(r.homeGoals) : null,
 
           idAway: r.awayId !== null ? Number(r.awayId) : null,
           away: r.awayName ?? null,
           awayLogo: await getLogoCached(
             r.awayIdLogo ? Number(r.awayIdLogo) : null,
           ),
+          // awayGoals: r.awayGoals !== null ? Number(r.awayGoals) : null,
         })),
       );
 

@@ -935,6 +935,50 @@ export class TournamentService {
     }
   }
 
+  async getTeamsByRound(roundId: number) {
+    try {
+      const rows = await this.dataSource.query(
+        `
+        SELECT
+          r.id        AS roundId,
+          r.home      AS homeId,
+          th.name     AS homeName,
+          r.away      AS awayId,
+          ta.name     AS awayName
+        FROM rounds r
+        INNER JOIN teams th ON th.id = r.home
+        INNER JOIN teams ta ON ta.id = r.away
+        WHERE r.id = ?
+        `,
+        [roundId],
+      );
+
+      const row = rows?.[0];
+
+      if (!row) {
+        throw new NotFoundException(`No se encontró el round con id=${roundId}`);
+      }
+
+      return {
+        httpCode: 200,
+        message: 'Equipos obtenidos correctamente',
+        data: {
+          roundId: row.roundId,
+          teams: [
+            { id: row.homeId, name: row.homeName, side: 'home' },
+            { id: row.awayId, name: row.awayName, side: 'away' },
+          ],
+        },
+      };
+    } catch (error) {
+      if (error?.status === 404) throw error;
+
+      throw new InternalServerErrorException(
+        `Error al obtener equipos del round: ${error.sqlMessage || error.message}`,
+      );
+    }
+  }
+
   // =========================================================
   // Draft algorithm (slots de calidad + posiciones + relleno)
   // =========================================================
