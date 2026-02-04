@@ -19,6 +19,7 @@ export class TeamService {
 
     @InjectRepository(Rounds)
     private readonly roundsRepository: Repository<Rounds>,
+    private readonly dataSource: DataSource,
     private readonly DataSource: DataSource,
     private readonly imageServices: ImagesService,
   ) {}
@@ -223,53 +224,82 @@ export class TeamService {
 
   async delete(id: number) {
     const apiResponse = new ApiResponse<TeamDTO[]>();
-
+  
     try {
-      // Eliminar el equipo por ID
-      const deleteResult = await this.teamRepository.delete({ id });
-
-      if (deleteResult.affected === 0) {
+      // 1) Verificar existencia del equipo
+      const team = await this.teamRepository.findOne({ where: { id } });
+  
+      if (!team) {
         return Object.assign(apiResponse, {
           data: null,
           httpCode: HttpStatus.OK,
           message: 'No existe un equipo con ese ID para eliminar',
         });
       }
-
-      // Obtener los equipos restantes
+  
+      // 2) Transacción: borrar eventos -> borrar equipo
+      let deletedEventsCount = 0;
+  
+      await this.dataSource.transaction(async (manager) => {
+        // Contar eventos (opcional, para mensaje)
+        const [{ total }] = await manager.query(
+          `SELECT COUNT(*) AS total FROM match_events WHERE teamId = ?`,
+          [id],
+        );
+        deletedEventsCount = Number(total) || 0;
+  
+        // Borrar eventos asociados
+        await manager.query(`DELETE FROM match_events WHERE teamId = ?`, [id]);
+  
+        // Borrar el equipo
+        const deleteResult = await manager.delete('teams', { id });
+  
+        if (!deleteResult.affected) {
+          // Si por alguna razón no borró, tiramos error para rollback
+          throw new Error('No se pudo eliminar el equipo');
+        }
+      });
+  
+      // 3) Obtener equipos restantes
       const remainingTeams = await this.teamRepository.find();
-
+  
       if (!remainingTeams || remainingTeams.length === 0) {
         return Object.assign(apiResponse, {
           data: null,
           httpCode: HttpStatus.OK,
-          message: 'No existen equipos registrados',
+          message:
+            deletedEventsCount > 0
+              ? `Equipo eliminado con éxito. También se eliminaron ${deletedEventsCount} evento(s) asociados. Ya no quedan equipos registrados.`
+              : 'Equipo eliminado con éxito. Ya no quedan equipos registrados.',
         });
       }
-
-      // Mapear los equipos restantes a objetos TeamDTO
+  
+      // 4) Mapear a DTO
       const teamDTOs = await Promise.all(
-        remainingTeams.map(async (team) => {
-          const teamDTO = new TeamDTO();
-          teamDTO.id = team.id;
-          teamDTO.name = team.name;
-          teamDTO.abreviatura = team.abreviatura;
-          teamDTO.idLogo = team.idLogo;
-          teamDTO.logo = await this.imageServices.getImage(team.idLogo);
-          return teamDTO;
+        remainingTeams.map(async (t) => {
+          const dto = new TeamDTO();
+          dto.id = t.id;
+          dto.name = t.name;
+          dto.abreviatura = t.abreviatura;
+          dto.idLogo = t.idLogo;
+          dto.logo = await this.imageServices.getImage(t.idLogo);
+          return dto;
         }),
       );
-
+  
       return Object.assign(apiResponse, {
         data: teamDTOs,
         httpCode: HttpStatus.OK,
-        message: 'Equipo eliminado con éxito',
+        message:
+          deletedEventsCount > 0
+            ? `Equipo eliminado con éxito. También se eliminaron ${deletedEventsCount} evento(s) asociados.`
+            : 'Equipo eliminado con éxito',
       });
     } catch (error) {
       return Object.assign(apiResponse, {
         data: null,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
-        message: `Error al eliminar el equipo: ${error.message}`,
+        message: `Error al eliminar el equipo: ${error?.message ?? error}`,
       });
     }
   }

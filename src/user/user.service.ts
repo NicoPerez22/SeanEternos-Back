@@ -27,6 +27,10 @@ export class UserService {
     return await this.userRepository.findOne({ where: { id } });
   }
 
+  async updateUser(id: number, dto: any) {
+    return this.userRepository.update({ id }, dto);
+  }
+
   async findUser() {
     const apiResponse = new ApiResponse<ResponseUserDTO>();
     const resp = await this.userRepository.find();
@@ -61,20 +65,15 @@ export class UserService {
 
       if (!user) throw new NotFoundException(`Cant not found user ${id}`);
 
-      if (!user.teams || user.teams.length === 0) {
-        return Object.assign(apiResponse, {
-          data: null,
-          httpCode: HttpStatus.OK,
-          message: 'El usuario no tiene equipos',
-        });
+      if (user?.teams && user?.teams?.length > 0) {
+        const team = user.teams[0];
+        const logo = await this.ImagesService.getImage(team.idLogo);
+  
+        teamDTO.name = team.name;
+        teamDTO.id = team.id;
+        teamDTO.logo = logo;
       }
 
-      const team = user.teams[0];
-      const logo = await this.ImagesService.getImage(team.idLogo);
-
-      teamDTO.name = team.name;
-      teamDTO.id = team.id;
-      teamDTO.logo = logo;
 
       return Object.assign(apiResponse, {
         httpCode: HttpStatus.OK,

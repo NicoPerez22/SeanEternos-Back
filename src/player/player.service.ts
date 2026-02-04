@@ -184,8 +184,8 @@ export class PlayerService {
       const resp = await this.playerRepository
         .createQueryBuilder()
         .update(Player)
-        .set({ team: null })
-        .where('teamId IS NOT NULL')
+        .set({ idTeam: null as any })
+        .where('idTeam IS NOT NULL')
         .execute();
 
       return {

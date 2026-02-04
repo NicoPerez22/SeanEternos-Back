@@ -21,6 +21,9 @@ export class User {
   @Column()
   lastName: string;
 
+  @Column()
+  userName: string;
+
   @OneToMany(() => Team, (team) => team.owner)
   teams: Team[];
 }

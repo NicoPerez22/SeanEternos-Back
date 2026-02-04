@@ -13,7 +13,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async registerUser({ email, password }: UserDTO) {
+  async registerUser({ email, password, name, lastName, userName}: UserDTO) {
     const apiResponse = new ApiResponse<User>();
 
     try {
@@ -30,6 +30,10 @@ export class AuthService {
       return await this.userService.createUser({
         email,
         password: await bcryptjs.hash(password, 10),
+        name,
+        lastName,
+        userName,
+        idRol: 2,
       });
     } catch (error) {
       return Object.assign(apiResponse, {
