@@ -552,16 +552,17 @@ export class PlayerService {
   ) {
     try {
       const reviewNote = dto.reviewNote ?? null;
-
+  
       const result = await this.dataSource.query(
         `CALL sp_review_transfer_offer(?, ?, ?, ?)`,
         [offerId, adminId, dto.action, reviewNote],
       );
-
-      const rows = Array.isArray(result?.[0]) ? result[0] : result;
+  
+      const first = result?.[0];
+      const rows = Array.isArray(first?.[0]) ? first[0] : first;
       const row = rows?.[0];
-
-      return { ok: true, data: row ?? rows };
+  
+      return { ok: true, data: row ?? rows ?? result };
     } catch (err: any) {
       this.handleMysqlSpError(err);
     }
