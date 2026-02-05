@@ -77,6 +77,8 @@ export class AuthService {
           email: user.email,
           expiryToken: 10000,
           nombre: user.name,
+          lastName: user.lastName,
+          userName: user.userName,
           idRol: user.idRol,
           idTeam: team.data ? team.data.id : null,
         },
