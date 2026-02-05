@@ -527,22 +527,19 @@ export class PlayerService {
     try {
       const note = dto.note ?? null;
 
-      // TypeORM MySQL devuelve arrays por cada resultset
+      const targetJson = JSON.stringify(dto.targetPlayerIds);
+      const offeredJson = JSON.stringify(dto.offeredPlayerIds);
+
       const result = await this.dataSource.query(
         `CALL sp_create_transfer_offer(?, ?, ?, ?)`,
-        [dto.fromTeamId, dto.targetPlayerId, dto.offeredPlayerId, note],
+        [dto.fromTeamId, targetJson, offeredJson, note],
       );
 
-      // En MySQL suele venir: [ [rows], [proc metadata], ...]
-      const rows = Array.isArray(result?.[0]) ? result[0] : result;
+      const first = result?.[0];
+      const rows = Array.isArray(first?.[0]) ? first[0] : first;
       const row = rows?.[0];
 
-      if (!row?.offerId) {
-        // Por si el driver devuelve distinto
-        return { ok: true, data: rows };
-      }
-
-      return { ok: true, data: row };
+      return { ok: true, data: row ?? rows ?? result };
     } catch (err: any) {
       this.handleMysqlSpError(err);
     }
@@ -570,72 +567,106 @@ export class PlayerService {
     }
   }
 
-async listPending(page = 1, limit = 20) {
-  const safeLimit = Math.min(Math.max(limit, 1), 100);
-  const safePage = Math.max(page, 1);
-  const offset = (safePage - 1) * safeLimit;
+  async listPending(page = 1, limit = 20) {
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const safePage = Math.max(page, 1);
+    const offset = (safePage - 1) * safeLimit;
 
-  const where = `o.status = 'pending'`;
-  const params: any[] = [];
+    const where = `o.status = 'pending'`;
+    const params: any[] = [];
 
-  // Total (para paginado)
-  const totalRows = await this.dataSource.query(
-    `SELECT COUNT(*) AS total
-     FROM transfer_offers o
-     WHERE ${where}`,
-    params,
-  );
-  const total = Number(totalRows?.[0]?.total ?? 0);
+    const totalRows = await this.dataSource.query(
+      `SELECT COUNT(*) AS total FROM transfer_offers o WHERE ${where}`,
+      params,
+    );
+    const total = Number(totalRows?.[0]?.total ?? 0);
 
-  const rows = await this.dataSource.query(
-    `SELECT
-      o.id,
-      o.status,
-      CASE o.status
-        WHEN 'pending'   THEN 'Pendiente'
-        WHEN 'approved'  THEN 'Aprobada'
-        WHEN 'rejected'  THEN 'Rechazada'
-        WHEN 'cancelled' THEN 'Cancelada'
-        ELSE o.status
-      END AS statusEs,
+    const rows = await this.dataSource.query(
+      `
+      SELECT
+        o.id,
+        o.status,
+        CASE o.status
+          WHEN 'pending'   THEN 'Pendiente'
+          WHEN 'approved'  THEN 'Aprobada'
+          WHEN 'rejected'  THEN 'Rechazada'
+          WHEN 'cancelled' THEN 'Cancelada'
+          ELSE o.status
+        END AS statusEs,
+  
+        o.fromTeamId,
+        tf.name AS fromTeamName,
+        imgFrom.secureUrl AS fromTeamLogoUrl,
+  
+        o.toTeamId,
+        tt.name AS toTeamName,
+        imgTo.secureUrl AS toTeamLogoUrl,
+  
+        -- Targets (array)
+        COALESCE(
+          JSON_ARRAYAGG(DISTINCT
+            CASE WHEN pT.id IS NULL THEN NULL
+            ELSE JSON_OBJECT('id', pT.id, 'name', pT.name, 'lastName', pT.lastName, 'teamId', pT.idTeam, 'valoration', pT.valoration)
+            END
+          ),
+          JSON_ARRAY()
+        ) AS targetPlayers,
+  
+        -- Offered (array)
+        COALESCE(
+          JSON_ARRAYAGG(DISTINCT
+            CASE WHEN pO.id IS NULL THEN NULL
+            ELSE JSON_OBJECT('id', pO.id, 'name', pO.name, 'lastName', pO.lastName, 'teamId', pO.idTeam, 'valoration', pO.valoration)
+            END
+          ),
+          JSON_ARRAY()
+        ) AS offeredPlayers
+  
+      FROM transfer_offers o
+      LEFT JOIN teams tf ON tf.id = o.fromTeamId
+      LEFT JOIN teams tt ON tt.id = o.toTeamId
+      LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
+      LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
+  
+      LEFT JOIN transfer_offer_targets tot ON tot.offerId = o.id
+      LEFT JOIN players pT ON pT.id = tot.targetPlayerId
+  
+      LEFT JOIN transfer_offer_players top ON top.offerId = o.id
+      LEFT JOIN players pO ON pO.id = top.offeredPlayerId
+  
+      WHERE ${where}
+      GROUP BY
+        o.id, o.status, o.fromTeamId, tf.name, imgFrom.secureUrl,
+        o.toTeamId, tt.name, imgTo.secureUrl
+      ORDER BY o.createdAt DESC
+      LIMIT ? OFFSET ?
+      `,
+      [...params, safeLimit, offset],
+    );
 
-      o.fromTeamId,
-      tf.name AS fromTeamName,
-      imgFrom.secureUrl AS fromTeamLogoUrl,
+    const data = (rows ?? []).map((r: any) => ({
+      ...r,
+      targetPlayers:
+        typeof r.targetPlayers === 'string'
+          ? JSON.parse(r.targetPlayers)
+          : (r.targetPlayers ?? []),
+      offeredPlayers:
+        typeof r.offeredPlayers === 'string'
+          ? JSON.parse(r.offeredPlayers)
+          : (r.offeredPlayers ?? []),
+    }));
 
-      o.toTeamId,
-      tt.name AS toTeamName,
-      imgTo.secureUrl AS toTeamLogoUrl,
-
-      o.targetPlayerId,
-      pTarget.name     AS targetPlayerName,
-      pTarget.lastname AS targetPlayerLastname,
-
-      o.offeredPlayerId,
-      pOffer.name      AS offeredPlayerName,
-      pOffer.lastname  AS offeredPlayerLastname
-
-    FROM transfer_offers o
-    LEFT JOIN teams tf ON tf.id = o.fromTeamId
-    LEFT JOIN teams tt ON tt.id = o.toTeamId
-
-    LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
-    LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
-
-    LEFT JOIN players pTarget ON pTarget.id = o.targetPlayerId
-    LEFT JOIN players pOffer  ON pOffer.id  = o.offeredPlayerId
-
-    WHERE ${where}
-    ORDER BY o.createdAt DESC
-    LIMIT ? OFFSET ?`,
-    [...params, safeLimit, offset],
-  );
-
-  return {
-    ok: true,
-    data: rows,
-  };
-}
+    return {
+      ok: true,
+      data,
+      meta: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages: Math.ceil(total / safeLimit),
+      },
+    };
+  }
 
   private handleMysqlSpError(err: any): never {
     const sqlState = err?.sqlState;
@@ -685,48 +716,90 @@ async listPending(page = 1, limit = 20) {
     const total = Number(totalRows?.[0]?.total ?? 0);
 
     const rows = await this.dataSource.query(
-      `SELECT
-        o.id,
-        o.status,
-        CASE o.status
-          WHEN 'pending'   THEN 'Pendiente'
-          WHEN 'approved'  THEN 'Aprobada'
-          WHEN 'rejected'  THEN 'Rechazada'
-          WHEN 'cancelled' THEN 'Cancelada'
-          ELSE o.status
-        END AS statusEs,
+      `
+    SELECT
+      o.id,
+      o.status,
+      CASE o.status
+        WHEN 'pending'   THEN 'Pendiente'
+        WHEN 'approved'  THEN 'Aprobada'
+        WHEN 'rejected'  THEN 'Rechazada'
+        WHEN 'cancelled' THEN 'Cancelada'
+        ELSE o.status
+      END AS statusEs,
 
-        o.fromTeamId,
-        tf.name AS fromTeamName,
-        imgFrom.secureUrl AS fromTeamLogoUrl,
+      o.fromTeamId,
+      tf.name AS fromTeamName,
+      imgFrom.secureUrl AS fromTeamLogoUrl,
 
-        o.toTeamId,
-        tt.name AS toTeamName,
-        imgTo.secureUrl AS toTeamLogoUrl,
+      o.toTeamId,
+      tt.name AS toTeamName,
+      imgTo.secureUrl AS toTeamLogoUrl,
 
-        o.targetPlayerId,
-        pTarget.name     AS targetPlayerName,
-        pTarget.lastname AS targetPlayerLastname,
+      -- Targets (array)
+      (
+        SELECT COALESCE(
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', pT.id,
+              'name', pT.name,
+              'lastName', pT.lastName,
+              'teamId', pT.idTeam,
+              'valoration', pT.valoration
+            )
+          ),
+          JSON_ARRAY()
+        )
+        FROM transfer_offer_targets tot
+        JOIN players pT ON pT.id = tot.targetPlayerId
+        WHERE tot.offerId = o.id
+      ) AS targetPlayers,
 
-        o.offeredPlayerId,
-        pOffer.name      AS offeredPlayerName,
-        pOffer.lastname  AS offeredPlayerLastname
+      -- Offered (array)
+      (
+        SELECT COALESCE(
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', pO.id,
+              'name', pO.name,
+              'lastName', pO.lastName,
+              'teamId', pO.idTeam,
+              'valoration', pO.valoration
+            )
+          ),
+          JSON_ARRAY()
+        )
+        FROM transfer_offer_players top
+        JOIN players pO ON pO.id = top.offeredPlayerId
+        WHERE top.offerId = o.id
+      ) AS offeredPlayers
 
-      FROM transfer_offers o
-      LEFT JOIN teams tf ON tf.id = o.fromTeamId
-      LEFT JOIN teams tt ON tt.id = o.toTeamId
+    FROM transfer_offers o
+    LEFT JOIN teams tf ON tf.id = o.fromTeamId
+    LEFT JOIN teams tt ON tt.id = o.toTeamId
 
-      LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
-      LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
+    LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
+    LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
 
-      LEFT JOIN players pTarget ON pTarget.id = o.targetPlayerId
-      LEFT JOIN players pOffer  ON pOffer.id  = o.offeredPlayerId
-
-      WHERE ${where}
-      ORDER BY o.createdAt DESC
-      LIMIT ? OFFSET ?`,
+    WHERE ${where}
+    ORDER BY o.createdAt DESC
+    LIMIT ? OFFSET ?
+    `,
       [...params, safeLimit, offset],
     );
+
+    // MySQL a veces devuelve JSON como string -> parse
+    const data = (rows ?? []).map((r: any) => ({
+      ...r,
+      targetPlayers:
+        typeof r.targetPlayers === 'string'
+          ? JSON.parse(r.targetPlayers)
+          : (r.targetPlayers ?? []),
+      offeredPlayers:
+        typeof r.offeredPlayers === 'string'
+          ? JSON.parse(r.offeredPlayers)
+          : (r.offeredPlayers ?? []),
+    }));
 
     return {
       ok: true,
@@ -736,8 +809,9 @@ async listPending(page = 1, limit = 20) {
         page: safePage,
         limit: safeLimit,
         total,
+        totalPages: Math.ceil(total / safeLimit),
       },
-      data: rows,
+      data,
     };
   }
 }

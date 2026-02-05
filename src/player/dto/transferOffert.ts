@@ -1,7 +1,7 @@
 export class CreateTransferOfferDto {
   fromTeamId: number;
-  targetPlayerId: number;
-  offeredPlayerId: number;
+  targetPlayerIds: number[];
+  offeredPlayerIds: number[];
   note?: string;
 }
 
