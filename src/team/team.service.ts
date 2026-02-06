@@ -218,8 +218,46 @@ export class TeamService {
     }
   }
 
-  async updateTeam(id: number, user: any) {
-    return await this.teamRepository.update({ id }, user);
+  async updateTeam(id: number, teamdto: any) {
+    const apiResponse = new ApiResponse<Team>();
+
+    try {
+      const team = await this.teamRepository.findOne({
+        where: {
+          name: teamdto?.name,
+        },
+      });
+
+      if (team) {
+        return {
+          ...apiResponse,
+          data: null,
+          httpCode: HttpStatus.OK,
+          message: 'Ya existe un equipo con ese nombre',
+        };
+      }
+
+      const createdTeam = this.teamRepository.update({ id }, {
+        name: teamdto.name,
+        idLogo: teamdto.idLogo,
+        abreviatura: teamdto.abreviatura,
+      });
+
+      const resp = await this.teamRepository.update({ id }, teamdto);
+      return {
+        ...apiResponse,
+        data: resp,
+        httpCode: HttpStatus.OK,
+        message: 'Equipo Editado con exito',
+      };
+    } catch (error) {
+      return {
+        ...apiResponse,
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al crear el equipo: ${error.message}`,
+      };
+    }
   }
 
   async delete(id: number) {

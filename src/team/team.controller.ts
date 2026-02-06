@@ -43,8 +43,8 @@ export class TeamController {
   }
 
   @Patch(':id')
-  updateTeam(@Param('id', ParseIntPipe) id: number, @Body() user: any) {
-    return this.teamService.updateTeam(id, user);
+  updateTeam(@Param('id', ParseIntPipe) id: number, @Body() team: any) {
+    return this.teamService.updateTeam(id, team);
   }
 
   @Delete(':id')
