@@ -54,6 +54,7 @@ export class AuthService {
           data: null,
           httpCode: HttpStatus.OK,
           message: 'El mail o la contraseña no son correctas',
+          code: -1,
         });
       }
 
@@ -63,6 +64,7 @@ export class AuthService {
           data: null,
           httpCode: HttpStatus.OK,
           message: 'El mail o la contraseña no son correctas',
+          code: -1,
         });
       }
 
