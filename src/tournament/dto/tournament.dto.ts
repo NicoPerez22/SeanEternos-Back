@@ -4,4 +4,5 @@ export class CreateTournamentDto {
   formatId?: number;
   teamsIds: number[];
   enableDraft: boolean;
+  groups?: any[];
 }

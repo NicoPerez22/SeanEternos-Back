@@ -163,19 +163,22 @@ export class TournamentService {
   // CREATE TOURNAMENT (SP)
   // -----------------------------------------------------
   async createTournament(dto: CreateTournamentDto) {
-    const { name, logo, formatId, teamsIds, enableDraft } = dto;
+    const { name, logo, formatId, teamsIds, enableDraft, groups  } = dto;
+
+    const groupsJson =
+    formatId === 2 ? JSON.stringify(groups ?? []) : null;
 
     const result: any = await this.dataSource.query(
-      `CALL sp_create_tournament(?, ?, ?, ?, ?)`,
+      `CALL sp_create_tournament(?, ?, ?, ?, ?, ?)`,
       [
         name,
         logo,
         formatId ?? null,
-        JSON.stringify(teamsIds),
+        JSON.stringify(teamsIds ?? []),
         enableDraft ? 1 : 0,
+        groupsJson,
       ],
     );
-
     const tournamentId = result?.[0]?.[0]?.tournamentId;
 
     await this.dataSource.query(
