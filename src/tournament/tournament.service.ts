@@ -1311,4 +1311,86 @@ export class TournamentService {
       return url;
     };
   }
+
+  async previewMatchReport(dto: {
+    roundId: number;
+    tournamentId: number;
+    homeGoals: number;
+    awayGoals: number;
+    events: any[];
+  }) {
+    const { roundId, tournamentId, homeGoals, awayGoals, events } = dto;
+  
+    const result: any = await this.dataSource.query(
+      `CALL sp_preview_match_report(?, ?, ?, ?, ?)`,
+      [
+        roundId,
+        tournamentId,
+        homeGoals ?? 0,
+        awayGoals ?? 0,
+        JSON.stringify(events ?? []),
+      ],
+    );
+  
+    const row = result?.[0]?.[0];
+    const raw = row?.previewReportJson ?? null;
+    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  
+    return {
+      message: 'Preview generado correctamente',
+      data,
+    };
+  }
+
+  async createDraft(dto: any) {
+    const result: any = await this.dataSource.query(
+      `CALL sp_create_match_report_draft(?, ?, ?, ?, ?, ?)`,
+      [
+        dto.roundId,
+        dto.tournamentId,
+        dto.homeGoals ?? 0,
+        dto.awayGoals ?? 0,
+        JSON.stringify(dto.events ?? []),
+        dto.createdByUserId ?? null,
+      ],
+    );
+  
+    const draftId = result?.[0]?.[0]?.draftId;
+  
+    return { message: 'Draft creado', draftId };
+  }
+  
+  async listDrafts(filters: { status: string | null; tournamentId: number | null }) {
+    const result: any = await this.dataSource.query(
+      `CALL sp_list_match_report_drafts(?, ?)`,
+      [filters.status, filters.tournamentId],
+    );
+  
+    return { message: 'Drafts obtenidos', data: result?.[0] ?? [] };
+  }
+  
+  async getDraftDetail(draftId: number) {
+    const result: any = await this.dataSource.query(
+      `CALL sp_get_match_report_draft_detail(?)`,
+      [draftId],
+    );
+  
+    // 2 resultsets: header y events
+    const header = result?.[0]?.[0] ?? null;
+    const events = result?.[1] ?? [];
+  
+    if (!header) throw new NotFoundException(`Draft no encontrado id=${draftId}`);
+  
+    return { message: 'Detalle draft', data: { ...header, events } };
+  }
+  
+  async reviewDraft(draftId: number, dto: { adminId: number; action: string; reviewNote?: string }) {
+    const result: any = await this.dataSource.query(
+      `CALL sp_review_match_report_draft(?, ?, ?, ?)`,
+      [draftId, dto.adminId, dto.action, dto.reviewNote ?? null],
+    );
+  
+    const row = result?.[0]?.[0];
+    return { message: 'Draft revisado', data: row };
+  }
 }

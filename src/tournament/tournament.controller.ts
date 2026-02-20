@@ -7,6 +7,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
 } from '@nestjs/common';
 import { CreateTournamentDto } from './dto/tournament.dto';
 
@@ -19,9 +20,35 @@ export class TournamentController {
     return this.tournamentService.getFormats();
   }
 
+  @Get('admin/match-report-drafts')
+  async adminListDrafts(@Query('status') status?: string, @Query('tournamentId') tournamentId?: string) {
+    return await this.tournamentService.listDrafts({
+      status: status ?? null,
+      tournamentId: tournamentId ? Number(tournamentId) : null,
+    });
+  }
+
+  @Get('admin/match-report-drafts/:draftId')
+  async adminGetDraftDetail(@Param('draftId', ParseIntPipe) draftId: number) {
+    return await this.tournamentService.getDraftDetail(draftId);
+  }
+
+  @Post('admin/match-report-drafts/:draftId/review')
+  async adminReviewDraft(
+    @Param('draftId', ParseIntPipe) draftId: number,
+    @Body() dto: { adminId: number; action: 'approve' | 'reject'; reviewNote?: string }
+  ) {
+    return await this.tournamentService.reviewDraft(draftId, dto);
+  }
+
   @Post()
   async createTournament(@Body() dto: CreateTournamentDto) {
     return await this.tournamentService.createTournament(dto);
+  }
+
+  @Get(':roundId/teams')
+  async getTeamsByRound(@Param('roundId', ParseIntPipe) roundId: number) {
+    return await this.tournamentService.getTeamsByRound(roundId);
   }
 
   @Get()
@@ -87,8 +114,13 @@ export class TournamentController {
     return this.tournamentService.getDraftStatus(tournamentId);
   }
 
-  @Get(':roundId/teams')
-  getTeamsByRound(@Param('roundId', ParseIntPipe) roundId: number) {
-    return this.tournamentService.getTeamsByRound(roundId);
+  @Post('preview')
+  async preview(@Body() dto: any) {
+    return this.tournamentService.createDraft(dto);
   }
+
+  // @Post('match-report-drafts')
+  // create(@Body() dto: any) {
+  //   return this.tournamentService.createDraft(dto);
+  // }
 }
