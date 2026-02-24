@@ -596,20 +596,123 @@ export class TournamentService {
   // HIGHLIGHTS (best attack, defense, leader)
   // -----------------------------------------------------
   async getHighlights(tournamentId: number) {
-    const result = await this.dataSource.query(
-      `
-      SELECT 
-        bestAttackTeam,
-        bestDefenseTeam,
-        leaderTeam
-      FROM tournament_statistics
-      WHERE tournamentId = ?;
-      `,
-      [tournamentId],
-    );
+    const apiResponse = new ApiResponse<any[]>();
 
-    return result[0] || null;
+    try {
+      const scorers = await this.dataSource.query(
+        `
+        SELECT
+          me.playerId,
+          TRIM(CONCAT(COALESCE(p.name,''), ' ', COALESCE(p.lastName,''))) AS playerName,
+          p.teamId AS teamId,
+          t.name AS teamName,
+          i.secureUrl AS teamLogo,
+  
+          COUNT(*) AS goals,
+  
+          (
+            SELECT COUNT(*)
+            FROM rounds r
+            WHERE r.tournamentId = ?
+              AND r.state = 1
+              AND (r.home = p.teamId OR r.away = p.teamId)
+          ) AS matchesPlayed
+  
+        FROM match_events me
+        INNER JOIN match_reports mr ON mr.id = me.reportId
+        LEFT JOIN players p ON p.id = me.playerId
+        LEFT JOIN teams t ON t.id = p.teamId
+        LEFT JOIN image i ON i.id = t.idLogo
+  
+        WHERE mr.tournamentId = ?
+          AND me.eventType = 'GOAL'
+          AND me.playerId IS NOT NULL
+  
+        GROUP BY me.playerId, playerName, teamId, teamName, teamLogo, matchesPlayed
+        ORDER BY goals DESC, matchesPlayed ASC, playerName ASC
+        LIMIT 10;
+        `,
+        [tournamentId, tournamentId],
+      );
+  
+      if (!scorers?.length) {
+        return {
+          ...apiResponse,
+          httpCode: HttpStatus.OK,
+          message: 'No existen goleadores para este torneo',
+        };
+      }
+  
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: 'Goleadores obtenidos correctamente',
+        data: scorers,
+      };
+    } catch (error: any) {
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.NOT_FOUND,
+        message: `Error al obtener goleadores: ${error.sqlMessage || error.message}`,
+      };
+    }
   }
+
+
+  async getCardsLeaders(tournamentId: number) {
+    const apiResponse = new ApiResponse<any[]>();
+
+    try {
+      const cards = await this.dataSource.query(
+        `
+        SELECT
+          me.playerId,
+          TRIM(CONCAT(COALESCE(p.name,''), ' ', COALESCE(p.lastName,''))) AS playerName,
+          COALESCE(p.teamId, me.teamId) AS teamId,
+          t.name AS teamName,
+          i.secureUrl AS teamLogo,
+  
+          SUM(CASE WHEN me.eventType = 'YELLOW' THEN 1 ELSE 0 END) AS yellows,
+          SUM(CASE WHEN me.eventType = 'RED' THEN 1 ELSE 0 END) AS reds,
+          COUNT(*) AS totalCards
+        FROM match_events me
+        INNER JOIN match_reports mr ON mr.id = me.reportId
+        LEFT JOIN players p ON p.id = me.playerId
+        LEFT JOIN teams t ON t.id = COALESCE(p.teamId, me.teamId)
+        LEFT JOIN image i ON i.id = t.idLogo
+        WHERE mr.tournamentId = ?
+          AND me.playerId IS NOT NULL
+          AND me.eventType IN ('YELLOW', 'RED')
+        GROUP BY me.playerId, playerName, teamId, teamName, teamLogo
+        ORDER BY totalCards DESC, reds DESC, yellows DESC, playerName ASC
+        LIMIT 10;
+        `,
+        [tournamentId],
+      );
+  
+      if (!cards?.length) {
+        return {
+          ...apiResponse,
+          httpCode: HttpStatus.OK,
+          message: 'No existen tarjetas registradas para este torneo',
+        };
+      }
+  
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: 'Tarjetas obtenidas correctamente',
+        data: cards,
+      };
+    } catch (error: any) {
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.NOT_FOUND,
+        message: `Error al obtener tarjetas: ${error.sqlMessage || error.message}`,
+      };
+    }
+  }
+
 
   // -----------------------------------------------------
   // TEAM STATS FOR SPECIFIC TOURNAMENT

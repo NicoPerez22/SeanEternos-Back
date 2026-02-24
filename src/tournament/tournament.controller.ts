@@ -91,6 +91,11 @@ export class TournamentController {
     return this.tournamentService.getHighlights(tournamentId);
   }
 
+  @Get(':id/cards')
+  getRedCards(@Param('id') tournamentId: number) {
+    return this.tournamentService.getCardsLeaders(tournamentId);
+  }
+
   @Get(':id/:page')
   getRoundsPagination(
     @Param('id') tournamentId: number,
