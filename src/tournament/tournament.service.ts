@@ -817,6 +817,82 @@ export class TournamentService {
     }
   }
 
+  async getRoundsByTeamId(teamId: number, tournamentId?: number) {
+    const apiResponse = new ApiResponse<any>();
+
+    try {
+      const whereTournament =
+        tournamentId != null ? ' AND r.tournamentId = ?' : '';
+
+      const params: any[] =
+        tournamentId != null
+          ? [teamId, teamId, tournamentId]
+          : [teamId, teamId];
+
+      const rows: any[] = await this.dataSource.query(
+        `
+        SELECT
+          r.id           AS idRound,
+          r.tournamentId AS tournamentId,
+          t.name         AS tournamentName,
+          NULL           AS matchday,
+          r.groupNumber  AS groupNumber,
+          r.round        AS round,
+          r.state        AS state,
+
+          r.home         AS homeTeamId,
+          th.name        AS homeTeamName,
+          th.idLogo      AS homeIdLogo,
+          ih.secureUrl   AS homeLogoUrl,
+
+          r.away         AS awayTeamId,
+          ta.name        AS awayTeamName,
+          ta.idLogo      AS awayIdLogo,
+          ia.secureUrl   AS awayLogoUrl,
+
+          r.homeGoals    AS homeGoals,
+          r.awayGoals    AS awayGoals
+        FROM rounds r
+        INNER JOIN tournament t ON t.id = r.tournamentId
+        INNER JOIN teams th ON th.id = r.home
+        INNER JOIN teams ta ON ta.id = r.away
+        LEFT JOIN image ih ON ih.id = th.idLogo
+        LEFT JOIN image ia ON ia.id = ta.idLogo
+        WHERE (r.home = ? OR r.away = ?)
+        ${whereTournament}
+        ORDER BY r.tournamentId ASC, r.round ASC, r.id ASC
+        `,
+        params,
+      );
+
+      const resolveLogoUrl = this.createLogoUrlResolver();
+
+      const roundsWithLogoUrl = await Promise.all(
+        rows.map(async (r) => ({
+          ...r,
+          homeLogoUrl:
+            r.homeLogoUrl ?? (await resolveLogoUrl(r.homeIdLogo)) ?? null,
+          awayLogoUrl:
+            r.awayLogoUrl ?? (await resolveLogoUrl(r.awayIdLogo)) ?? null,
+        })),
+      );
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: 'Rounds del equipo obtenidos correctamente',
+        data: roundsWithLogoUrl,
+      };
+    } catch (error: any) {
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al cargar rounds del equipo: ${error.sqlMessage || error.message}`,
+        data: null,
+      };
+    }
+  }
+
   async saveMatchReport(dto: any) {
     const { roundId, tournamentId, homeGoals, awayGoals, events } = dto;
 

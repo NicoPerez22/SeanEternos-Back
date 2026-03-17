@@ -8,8 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { TournamentModule } from './tournament/tournament.module';
 import { TeamModule } from './team/team.module';
 import { UploadModule } from './upload/upload.module';
-import { PlayerController } from './player/player.controller';
 import { PlayerModule } from './player/player.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -19,6 +19,7 @@ import { PlayerModule } from './player/player.module';
     TeamModule,
     UploadModule,
     PlayerModule,
+    DashboardModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',

@@ -74,10 +74,8 @@ export class TeamService {
         id,
       ]);
 
-      // MySQL suele devolver: [rs1, rs2, rs3, ...]
       const teamRows = result?.[0] ?? [];
       const playersRows = result?.[1] ?? [];
-      const roundsRows = result?.[2] ?? [];
 
       if (!teamRows.length) {
         return Object.assign(apiResponse, {
@@ -125,34 +123,6 @@ export class TeamService {
         position: p.position,
         isTransfer: Number(p.isTransfer),
       }));
-
-      // Rounds + logos
-      teamDTO.rounds = await Promise.all(
-        (roundsRows ?? []).map(async (r: any) => ({
-          idRound: Number(r.idRound),
-          round: Number(r.roundNumber),
-          state: r.state,
-          teamWin: r.teamWin !== null ? Number(r.teamWin) : null,
-          teamLose: r.teamLose !== null ? Number(r.teamLose) : null,
-          tournament: r.tournamentId
-            ? { id: Number(r.tournamentId), name: r.tournamentName }
-            : null,
-
-          idHome: r.homeId !== null ? Number(r.homeId) : null,
-          home: r.homeName ?? null,
-          homeLogo: await getLogoCached(
-            r.homeIdLogo ? Number(r.homeIdLogo) : null,
-          ),
-          // homeGoals: r.homeGoals !== null ? Number(r.homeGoals) : null,
-
-          idAway: r.awayId !== null ? Number(r.awayId) : null,
-          away: r.awayName ?? null,
-          awayLogo: await getLogoCached(
-            r.awayIdLogo ? Number(r.awayIdLogo) : null,
-          ),
-          // awayGoals: r.awayGoals !== null ? Number(r.awayGoals) : null,
-        })),
-      );
 
       return Object.assign(apiResponse, {
         data: teamDTO,

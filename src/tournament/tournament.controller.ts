@@ -46,6 +46,18 @@ export class TournamentController {
     return await this.tournamentService.createTournament(dto);
   }
 
+  // Rounds de un equipo (opcionalmente filtradas por tournamentId)
+  @Get('team/:teamId/rounds')
+  async getRoundsByTeam(
+    @Param('teamId', ParseIntPipe) teamId: number,
+    @Query('tournamentId') tournamentId?: string,
+  ) {
+    return await this.tournamentService.getRoundsByTeamId(
+      teamId,
+      tournamentId != null && tournamentId !== '' ? Number(tournamentId) : undefined,
+    );
+  }
+
   @Get(':roundId/teams')
   async getTeamsByRound(@Param('roundId', ParseIntPipe) roundId: number) {
     return await this.tournamentService.getTeamsByRound(roundId);
