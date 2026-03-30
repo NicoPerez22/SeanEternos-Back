@@ -58,6 +58,12 @@ export class TournamentController {
     );
   }
 
+  // Rounds KO de un torneo
+  @Get(':id/rounds/ko')
+  async getKORoundsByTournament(@Param('id', ParseIntPipe) tournamentId: number) {
+    return await this.tournamentService.getKORoundsByTournamentId(tournamentId);
+  }
+
   @Get(':roundId/teams')
   async getTeamsByRound(@Param('roundId', ParseIntPipe) roundId: number) {
     return await this.tournamentService.getTeamsByRound(roundId);
