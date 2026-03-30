@@ -163,10 +163,9 @@ export class TournamentService {
   // CREATE TOURNAMENT (SP)
   // -----------------------------------------------------
   async createTournament(dto: CreateTournamentDto) {
-    const { name, logo, formatId, teamsIds, enableDraft, groups  } = dto;
+    const { name, logo, formatId, teamsIds, enableDraft, groups } = dto;
 
-    const groupsJson =
-    formatId === 2 ? JSON.stringify(groups ?? []) : null;
+    const groupsJson = formatId === 2 ? JSON.stringify(groups ?? []) : null;
 
     const result: any = await this.dataSource.query(
       `CALL sp_create_tournament(?, ?, ?, ?, ?, ?)`,
@@ -634,7 +633,7 @@ export class TournamentService {
         `,
         [tournamentId, tournamentId],
       );
-  
+
       if (!scorers?.length) {
         return {
           ...apiResponse,
@@ -642,7 +641,7 @@ export class TournamentService {
           message: 'No existen goleadores para este torneo',
         };
       }
-  
+
       return {
         ...apiResponse,
         httpCode: HttpStatus.OK,
@@ -657,7 +656,6 @@ export class TournamentService {
       };
     }
   }
-
 
   async getCardsLeaders(tournamentId: number) {
     const apiResponse = new ApiResponse<any[]>();
@@ -689,7 +687,7 @@ export class TournamentService {
         `,
         [tournamentId],
       );
-  
+
       if (!cards?.length) {
         return {
           ...apiResponse,
@@ -697,7 +695,7 @@ export class TournamentService {
           message: 'No existen tarjetas registradas para este torneo',
         };
       }
-  
+
       return {
         ...apiResponse,
         httpCode: HttpStatus.OK,
@@ -712,7 +710,6 @@ export class TournamentService {
       };
     }
   }
-
 
   // -----------------------------------------------------
   // TEAM STATS FOR SPECIFIC TOURNAMENT
@@ -835,32 +832,43 @@ export class TournamentService {
           r.id           AS idRound,
           r.tournamentId AS tournamentId,
           t.name         AS tournamentName,
-          NULL           AS matchday,
+          r.matchday     AS matchday,
           r.groupNumber  AS groupNumber,
           r.round        AS round,
           r.state        AS state,
-
+          r.stage        AS stage,
+          r.tieId        AS tieId,
+          r.leg          AS leg,
+  
           r.home         AS homeTeamId,
           th.name        AS homeTeamName,
           th.idLogo      AS homeIdLogo,
           ih.secureUrl   AS homeLogoUrl,
-
+  
           r.away         AS awayTeamId,
           ta.name        AS awayTeamName,
           ta.idLogo      AS awayIdLogo,
           ia.secureUrl   AS awayLogoUrl,
-
+  
           r.homeGoals    AS homeGoals,
           r.awayGoals    AS awayGoals
+  
         FROM rounds r
         INNER JOIN tournament t ON t.id = r.tournamentId
         INNER JOIN teams th ON th.id = r.home
         INNER JOIN teams ta ON ta.id = r.away
         LEFT JOIN image ih ON ih.id = th.idLogo
         LEFT JOIN image ia ON ia.id = ta.idLogo
+  
         WHERE (r.home = ? OR r.away = ?)
         ${whereTournament}
-        ORDER BY r.tournamentId ASC, r.round ASC, r.id ASC
+  
+        ORDER BY 
+          r.tournamentId ASC,
+          r.round ASC,
+          r.tieId ASC,
+          r.leg ASC,
+          r.id ASC
         `,
         params,
       );
@@ -870,6 +878,10 @@ export class TournamentService {
       const roundsWithLogoUrl = await Promise.all(
         rows.map(async (r) => ({
           ...r,
+
+          // 🔥 etiqueta clara para frontend
+          label: r.stage === 'KO' ? (r.leg === 1 ? 'Ida' : 'Vuelta') : null,
+
           homeLogoUrl:
             r.homeLogoUrl ?? (await resolveLogoUrl(r.homeIdLogo)) ?? null,
           awayLogoUrl:
@@ -887,7 +899,9 @@ export class TournamentService {
       return {
         ...apiResponse,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
-        message: `Error al cargar rounds del equipo: ${error.sqlMessage || error.message}`,
+        message: `Error al cargar rounds del equipo: ${
+          error.sqlMessage || error.message
+        }`,
         data: null,
       };
     }
@@ -897,68 +911,104 @@ export class TournamentService {
     const apiResponse = new ApiResponse<any>();
 
     try {
-      const stage = 'KO';
-
       const rows: any[] = await this.dataSource.query(
         `
         SELECT
-          r.id           AS idRound,
-          r.tournamentId AS tournamentId,
-          t.name         AS tournamentName,
-          NULL           AS matchday,
-          r.groupNumber  AS groupNumber,
-          r.round        AS round,
-          r.state        AS state,
-          r.stage        AS stage,
-
-          r.home         AS homeTeamId,
-          th.name        AS homeTeamName,
-          th.idLogo      AS homeIdLogo,
-          ih.secureUrl   AS homeLogoUrl,
-
-          r.away         AS awayTeamId,
-          ta.name        AS awayTeamName,
-          ta.idLogo      AS awayIdLogo,
-          ia.secureUrl   AS awayLogoUrl,
-
-          r.homeGoals    AS homeGoals,
-          r.awayGoals    AS awayGoals
-        FROM rounds r
-        INNER JOIN tournament t ON t.id = r.tournamentId
-        INNER JOIN teams th ON th.id = r.home
-        INNER JOIN teams ta ON ta.id = r.away
-        LEFT JOIN image ih ON ih.id = th.idLogo
+          t.id AS tieId,
+          t.round,
+  
+          t.teamA,
+          ta.name AS teamAName,
+          ta.idLogo AS teamAIdLogo,
+          ia.secureUrl AS teamALogo,
+  
+          t.teamB,
+          tb.name AS teamBName,
+          tb.idLogo AS teamBIdLogo,
+          ib.secureUrl AS teamBLogo,
+  
+          r.id AS matchId,
+          r.matchday,
+          r.home,
+          r.away,
+          r.homeGoals,
+          r.awayGoals,
+          r.state
+  
+        FROM ties t
+        JOIN rounds r ON r.tieId = t.id
+        JOIN teams ta ON ta.id = t.teamA
+        JOIN teams tb ON tb.id = t.teamB
         LEFT JOIN image ia ON ia.id = ta.idLogo
-        WHERE r.tournamentId = ?
-          AND UPPER(r.stage) = ?
-        ORDER BY r.round ASC, r.id ASC
+        LEFT JOIN image ib ON ib.id = tb.idLogo
+  
+        WHERE t.tournamentId = ?
+  
+        ORDER BY t.round ASC, t.id ASC, r.matchday ASC
         `,
-        [tournamentId, stage],
+        [tournamentId],
       );
 
       const resolveLogoUrl = this.createLogoUrlResolver();
 
-      const roundsWithLogoUrl = await Promise.all(
-        rows.map(async (r) => ({
-          ...r,
-          homeLogoUrl:
-            r.homeLogoUrl ?? (await resolveLogoUrl(r.homeIdLogo)) ?? null,
-          awayLogoUrl:
-            r.awayLogoUrl ?? (await resolveLogoUrl(r.awayIdLogo)) ?? null,
-        })),
-      );
+      const tiesMap = new Map();
+
+      for (const row of rows) {
+        if (!tiesMap.has(row.tieId)) {
+          tiesMap.set(row.tieId, {
+            tieId: row.tieId,
+            round: row.round,
+
+            teamA: {
+              id: row.teamA,
+              name: row.teamAName,
+              logo:
+                row.teamALogo ??
+                (await resolveLogoUrl(row.teamAIdLogo)) ??
+                null,
+            },
+
+            teamB: {
+              id: row.teamB,
+              name: row.teamBName,
+              logo:
+                row.teamBLogo ??
+                (await resolveLogoUrl(row.teamBIdLogo)) ??
+                null,
+            },
+
+            matches: [],
+          });
+        }
+
+        const tie = tiesMap.get(row.tieId);
+
+        tie.matches.push({
+          id: row.matchId,
+          matchday: row.matchday,
+          homeTeamId: row.home,
+          awayTeamId: row.away,
+          homeGoals: row.homeGoals,
+          awayGoals: row.awayGoals,
+          state: row.state,
+        });
+      }
+
+      const result = Array.from(tiesMap.values());
 
       return {
         ...apiResponse,
         httpCode: HttpStatus.OK,
-        message: 'Rounds KO del torneo obtenidos correctamente',
-        data: roundsWithLogoUrl,
+        message: 'Bracket KO obtenido correctamente',
+        data: result,
       };
     } catch (error: any) {
       return {
         ...apiResponse,
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
-        message: `Error al cargar rounds KO del torneo: ${error.sqlMessage || error.message}`,
+        message: `Error al cargar bracket KO: ${
+          error.sqlMessage || error.message
+        }`,
         data: null,
       };
     }
@@ -1209,7 +1259,9 @@ export class TournamentService {
       const row = rows?.[0];
 
       if (!row) {
-        throw new NotFoundException(`No se encontró el round con id=${roundId}`);
+        throw new NotFoundException(
+          `No se encontró el round con id=${roundId}`,
+        );
       }
 
       return {
@@ -1570,7 +1622,7 @@ export class TournamentService {
     events: any[];
   }) {
     const { roundId, tournamentId, homeGoals, awayGoals, events } = dto;
-  
+
     const result: any = await this.dataSource.query(
       `CALL sp_preview_match_report(?, ?, ?, ?, ?)`,
       [
@@ -1581,11 +1633,11 @@ export class TournamentService {
         JSON.stringify(events ?? []),
       ],
     );
-  
+
     const row = result?.[0]?.[0];
     const raw = row?.previewReportJson ?? null;
     const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  
+
     return {
       message: 'Preview generado correctamente',
       data,
@@ -1604,42 +1656,49 @@ export class TournamentService {
         dto.createdByUserId ?? null,
       ],
     );
-  
+
     const draftId = result?.[0]?.[0]?.draftId;
-  
+
     return { message: 'Draft creado', draftId };
   }
-  
-  async listDrafts(filters: { status: string | null; tournamentId: number | null }) {
+
+  async listDrafts(filters: {
+    status: string | null;
+    tournamentId: number | null;
+  }) {
     const result: any = await this.dataSource.query(
       `CALL sp_list_match_report_drafts(?, ?)`,
       [filters.status, filters.tournamentId],
     );
-  
+
     return { message: 'Drafts obtenidos', data: result?.[0] ?? [] };
   }
-  
+
   async getDraftDetail(draftId: number) {
     const result: any = await this.dataSource.query(
       `CALL sp_get_match_report_draft_detail(?)`,
       [draftId],
     );
-  
+
     // 2 resultsets: header y events
     const header = result?.[0]?.[0] ?? null;
     const events = result?.[1] ?? [];
-  
-    if (!header) throw new NotFoundException(`Draft no encontrado id=${draftId}`);
-  
+
+    if (!header)
+      throw new NotFoundException(`Draft no encontrado id=${draftId}`);
+
     return { message: 'Detalle draft', data: { ...header, events } };
   }
-  
-  async reviewDraft(draftId: number, dto: { adminId: number; action: string; reviewNote?: string }) {
+
+  async reviewDraft(
+    draftId: number,
+    dto: { adminId: number; action: string; reviewNote?: string },
+  ) {
     const result: any = await this.dataSource.query(
       `CALL sp_review_match_report_draft(?, ?, ?, ?)`,
       [draftId, dto.adminId, dto.action, dto.reviewNote ?? null],
     );
-  
+
     const row = result?.[0]?.[0];
     return { message: 'Draft revisado', data: row };
   }
