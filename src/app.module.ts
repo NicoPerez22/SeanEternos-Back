@@ -10,6 +10,7 @@ import { TeamModule } from './team/team.module';
 import { UploadModule } from './upload/upload.module';
 import { PlayerModule } from './player/player.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { resolveEnvFilePath } from './config/resolve-env-file';
 
 @Module({
   imports: [
@@ -22,7 +23,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     DashboardModule,
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
+      envFilePath: resolveEnvFilePath(),
     }),
     TypeOrmModule.forRoot({
       type: 'mysql',
