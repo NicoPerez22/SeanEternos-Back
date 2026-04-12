@@ -45,6 +45,10 @@ export class Rounds {
   @Column({ default: 0 })
   awayGoals: number;
 
+  /** Partido nulo: jugado 0-0 pero no cuenta para puntos/ranking (isNullMatch=1). */
+  @Column({ name: 'isNullMatch', type: 'tinyint', width: 1, default: 0 })
+  isNullMatch: number;
+
   // 👇 Relaciones correctas (TypeORM ahora sí sabe qué buscar)
   @ManyToOne(() => Team)
   @JoinColumn({ name: 'home' })

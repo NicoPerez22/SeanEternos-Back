@@ -127,6 +127,51 @@ export class TournamentService {
     private readonly imageService: ImagesService,
   ) {}
 
+  /**
+   * Partidos con state=1 cuentan en matchesPlayed aunque isNullMatch=1;
+   * puntos, V/E/D y goles solo desde partidos con nullM = 0.
+   */
+  private leagueStandingsStatsCte(): string {
+    return `
+    played_home AS (
+      SELECT r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga,
+        COALESCE(r.isNullMatch, 0) AS nullM
+      FROM rounds r
+      WHERE r.tournamentId = ?
+        AND r.state = 1
+        AND r.homeGoals IS NOT NULL
+        AND r.awayGoals IS NOT NULL
+    ),
+    played_away AS (
+      SELECT r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga,
+        COALESCE(r.isNullMatch, 0) AS nullM
+      FROM rounds r
+      WHERE r.tournamentId = ?
+        AND r.state = 1
+        AND r.homeGoals IS NOT NULL
+        AND r.awayGoals IS NOT NULL
+    ),
+    all_rows AS (
+      SELECT * FROM played_home
+      UNION ALL
+      SELECT * FROM played_away
+    ),
+    stats AS (
+      SELECT
+        teamId,
+        COUNT(*) AS matchesPlayed,
+        SUM(CASE WHEN nullM = 0 AND gf > ga THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN nullM = 0 AND gf = ga THEN 1 ELSE 0 END) AS draws,
+        SUM(CASE WHEN nullM = 0 AND gf < ga THEN 1 ELSE 0 END) AS losses,
+        SUM(CASE WHEN nullM = 0 THEN gf ELSE 0 END) AS goalsFor,
+        SUM(CASE WHEN nullM = 0 THEN ga ELSE 0 END) AS goalsAgainst,
+        SUM(CASE WHEN nullM = 0 THEN gf - ga ELSE 0 END) AS goalDifference,
+        SUM(CASE WHEN nullM = 0 THEN CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END ELSE 0 END) AS points
+      FROM all_rows
+      GROUP BY teamId
+    )`;
+  }
+
   // -----------------------------------------------------
   // GET FORMATS
   // -----------------------------------------------------
@@ -358,17 +403,35 @@ export class TournamentService {
   }
 
   // -----------------------------------------------------
-  // STANDINGS (team_statistics view)
+  // STANDINGS (misma lógica que ranking liga: partido nulo suma PJ, no puntos)
   // -----------------------------------------------------
   async getStandings(tournamentId: number) {
     return this.dataSource.query(
       `
-      SELECT *
-      FROM team_statistics
-      WHERE tournamentId = ?
-      ORDER BY points DESC, goalDifference DESC, goalsFor DESC;
+      WITH ${this.leagueStandingsStatsCte().trim()}
+      SELECT
+        ? AS tournamentId,
+        t.id AS teamId,
+        t.name AS teamName,
+        img.secureUrl AS logoUrl,
+        img.publicId AS logoPublicId,
+        img.originalName AS logoOriginalName,
+        COALESCE(s.points, 0) AS points,
+        COALESCE(s.goalDifference, 0) AS goalDifference,
+        COALESCE(s.goalsFor, 0) AS goalsFor,
+        COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
+        COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
+        COALESCE(s.wins, 0) AS wins,
+        COALESCE(s.draws, 0) AS draws,
+        COALESCE(s.losses, 0) AS losses
+      FROM tournament_teams tt
+      JOIN teams t ON t.id = tt.teamsId
+      LEFT JOIN image img ON img.id = t.idLogo
+      LEFT JOIN stats s ON s.teamId = t.id
+      WHERE tt.tournamentId = ?
+      ORDER BY points DESC, goalDifference DESC, goalsFor DESC, teamName ASC;
       `,
-      [tournamentId],
+      [tournamentId, tournamentId, tournamentId, tournamentId],
     );
   }
 
@@ -380,41 +443,7 @@ export class TournamentService {
 
     const rows: any[] = await this.dataSource.query(
       `
-    WITH played_home AS (
-      SELECT r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga
-      FROM rounds r
-      WHERE r.tournamentId = ?
-        AND r.state = 1
-        AND r.homeGoals IS NOT NULL
-        AND r.awayGoals IS NOT NULL
-    ),
-    played_away AS (
-      SELECT r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga
-      FROM rounds r
-      WHERE r.tournamentId = ?
-        AND r.state = 1
-        AND r.homeGoals IS NOT NULL
-        AND r.awayGoals IS NOT NULL
-    ),
-    all_rows AS (
-      SELECT * FROM played_home
-      UNION ALL
-      SELECT * FROM played_away
-    ),
-    stats AS (
-      SELECT
-        teamId,
-        COUNT(*) AS matchesPlayed,
-        SUM(CASE WHEN gf > ga THEN 1 ELSE 0 END) AS wins,
-        SUM(CASE WHEN gf = ga THEN 1 ELSE 0 END) AS draws,
-        SUM(CASE WHEN gf < ga THEN 1 ELSE 0 END) AS losses,
-        SUM(gf) AS goalsFor,
-        SUM(ga) AS goalsAgainst,
-        SUM(gf - ga) AS goalDifference,
-        SUM(CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END) AS points
-      FROM all_rows
-      GROUP BY teamId
-    )
+    WITH ${this.leagueStandingsStatsCte().trim()}
     SELECT
       t.id AS teamId,
       t.name AS teamName,
@@ -473,7 +502,8 @@ export class TournamentService {
       WHERE r.tournamentId = ? AND r.groupNumber IS NOT NULL
     ),
     played AS (
-      SELECT r.groupNumber AS groupNumber, r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga
+      SELECT r.groupNumber AS groupNumber, r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga,
+        COALESCE(r.isNullMatch, 0) AS nullM
       FROM rounds r
       WHERE r.tournamentId = ?
         AND r.groupNumber IS NOT NULL
@@ -483,7 +513,8 @@ export class TournamentService {
 
       UNION ALL
 
-      SELECT r.groupNumber AS groupNumber, r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga
+      SELECT r.groupNumber AS groupNumber, r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga,
+        COALESCE(r.isNullMatch, 0) AS nullM
       FROM rounds r
       WHERE r.tournamentId = ?
         AND r.groupNumber IS NOT NULL
@@ -496,13 +527,13 @@ export class TournamentService {
         groupNumber,
         teamId,
         COUNT(*) AS matchesPlayed,
-        SUM(CASE WHEN gf > ga THEN 1 ELSE 0 END) AS wins,
-        SUM(CASE WHEN gf = ga THEN 1 ELSE 0 END) AS draws,
-        SUM(CASE WHEN gf < ga THEN 1 ELSE 0 END) AS losses,
-        SUM(gf) AS goalsFor,
-        SUM(ga) AS goalsAgainst,
-        SUM(gf - ga) AS goalDifference,
-        SUM(CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END) AS points
+        SUM(CASE WHEN nullM = 0 AND gf > ga THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN nullM = 0 AND gf = ga THEN 1 ELSE 0 END) AS draws,
+        SUM(CASE WHEN nullM = 0 AND gf < ga THEN 1 ELSE 0 END) AS losses,
+        SUM(CASE WHEN nullM = 0 THEN gf ELSE 0 END) AS goalsFor,
+        SUM(CASE WHEN nullM = 0 THEN ga ELSE 0 END) AS goalsAgainst,
+        SUM(CASE WHEN nullM = 0 THEN gf - ga ELSE 0 END) AS goalDifference,
+        SUM(CASE WHEN nullM = 0 THEN CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END ELSE 0 END) AS points
       FROM played
       GROUP BY groupNumber, teamId
     )
@@ -717,11 +748,26 @@ export class TournamentService {
   async getTeamStats(teamId: number, tournamentId: number) {
     const result = await this.dataSource.query(
       `
-      SELECT *
-      FROM team_statistics
-      WHERE teamId = ? AND tournamentId = ?;
+      WITH ${this.leagueStandingsStatsCte().trim()}
+      SELECT
+        ? AS tournamentId,
+        t.id AS teamId,
+        t.name AS teamName,
+        COALESCE(s.points, 0) AS points,
+        COALESCE(s.goalDifference, 0) AS goalDifference,
+        COALESCE(s.goalsFor, 0) AS goalsFor,
+        COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
+        COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
+        COALESCE(s.wins, 0) AS wins,
+        COALESCE(s.draws, 0) AS draws,
+        COALESCE(s.losses, 0) AS losses
+      FROM stats s
+      JOIN teams t ON t.id = s.teamId
+      INNER JOIN tournament_teams tt ON tt.teamsId = s.teamId AND tt.tournamentId = ?
+      WHERE s.teamId = ?
+      LIMIT 1;
       `,
-      [teamId, tournamentId],
+      [tournamentId, tournamentId, tournamentId, tournamentId, teamId],
     );
 
     return result[0] || null;
@@ -1692,7 +1738,11 @@ export class TournamentService {
 
   async reviewDraft(
     draftId: number,
-    dto: { adminId: number; action: string; reviewNote?: string },
+    dto: {
+      adminId: number;
+      action: 'approve' | 'reject' | 'null_match';
+      reviewNote?: string;
+    },
   ) {
     const result: any = await this.dataSource.query(
       `CALL sp_review_match_report_draft(?, ?, ?, ?)`,

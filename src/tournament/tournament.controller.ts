@@ -21,7 +21,10 @@ export class TournamentController {
   }
 
   @Get('admin/match-report-drafts')
-  async adminListDrafts(@Query('status') status?: string, @Query('tournamentId') tournamentId?: string) {
+  async adminListDrafts(
+    @Query('status') status?: string,
+    @Query('tournamentId') tournamentId?: string,
+  ) {
     return await this.tournamentService.listDrafts({
       status: status ?? null,
       tournamentId: tournamentId ? Number(tournamentId) : null,
@@ -36,7 +39,12 @@ export class TournamentController {
   @Post('admin/match-report-drafts/:draftId/review')
   async adminReviewDraft(
     @Param('draftId', ParseIntPipe) draftId: number,
-    @Body() dto: { adminId: number; action: 'approve' | 'reject'; reviewNote?: string }
+    @Body()
+    dto: {
+      adminId: number;
+      action: 'approve' | 'reject' | 'null_match';
+      reviewNote?: string;
+    },
   ) {
     return await this.tournamentService.reviewDraft(draftId, dto);
   }
@@ -54,13 +62,17 @@ export class TournamentController {
   ) {
     return await this.tournamentService.getRoundsByTeamId(
       teamId,
-      tournamentId != null && tournamentId !== '' ? Number(tournamentId) : undefined,
+      tournamentId != null && tournamentId !== ''
+        ? Number(tournamentId)
+        : undefined,
     );
   }
 
   // Rounds KO de un torneo
   @Get(':id/rounds/ko')
-  async getKORoundsByTournament(@Param('id', ParseIntPipe) tournamentId: number) {
+  async getKORoundsByTournament(
+    @Param('id', ParseIntPipe) tournamentId: number,
+  ) {
     return await this.tournamentService.getKORoundsByTournamentId(tournamentId);
   }
 
