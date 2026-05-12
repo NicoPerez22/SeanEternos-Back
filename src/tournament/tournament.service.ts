@@ -278,23 +278,28 @@ export class TournamentService {
       // Si tu transfer_offers tiene tournamentId:
       // await qr.query(`DELETE FROM transfer_offers WHERE tournamentId = ?`, [tournamentId]);
 
-      // 4) tournament_teams
-      await qr.query(`DELETE FROM tournament_teams WHERE tournamentId = ?`, [
-        tournamentId,
-      ]);
-
-      // 5) rounds (la FK que te está bloqueando)
+      // 4) rounds (FK tieId → ties)
       await qr.query(`DELETE FROM rounds WHERE tournamentId = ?`, [
         tournamentId,
       ]);
 
-      // 6) tournament_statistics (si existe por tournamentId)
+      // 5) ties (FK tournamentId → tournament)
+      await qr.query(`DELETE FROM ties WHERE tournamentId = ?`, [
+        tournamentId,
+      ]);
+
+      // 6) tournament_teams
+      await qr.query(`DELETE FROM tournament_teams WHERE tournamentId = ?`, [
+        tournamentId,
+      ]);
+
+      // 7) tournament_statistics
       await qr.query(
         `DELETE FROM tournament_statistics WHERE tournamentId = ?`,
         [tournamentId],
       );
 
-      // 7) Finalmente el torneo
+      // 8) Finalmente el torneo
       const del: any = await qr.query(`DELETE FROM tournament WHERE id = ?`, [
         tournamentId,
       ]);
