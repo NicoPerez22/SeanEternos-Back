@@ -14,6 +14,10 @@ import { resolveEnvFilePath } from './config/resolve-env-file';
 
 @Module({
   imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: resolveEnvFilePath(),
+    }),
     UserModule,
     AuthModule,
     TournamentModule,
@@ -21,10 +25,6 @@ import { resolveEnvFilePath } from './config/resolve-env-file';
     UploadModule,
     PlayerModule,
     DashboardModule,
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: resolveEnvFilePath(),
-    }),
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: process.env.MYSQLHOST,
