@@ -1,7 +1,3 @@
-import { config } from 'dotenv';
-import { resolveEnvFilePath } from './config/resolve-env-file';
-config({ path: resolveEnvFilePath() });
-
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
