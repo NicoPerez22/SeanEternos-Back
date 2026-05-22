@@ -284,9 +284,7 @@ export class TournamentService {
       ]);
 
       // 5) ties (FK tournamentId → tournament)
-      await qr.query(`DELETE FROM ties WHERE tournamentId = ?`, [
-        tournamentId,
-      ]);
+      await qr.query(`DELETE FROM ties WHERE tournamentId = ?`, [tournamentId]);
 
       // 6) tournament_teams
       await qr.query(`DELETE FROM tournament_teams WHERE tournamentId = ?`, [
@@ -702,23 +700,76 @@ export class TournamentService {
         SELECT
           me.playerId,
           TRIM(CONCAT(COALESCE(p.name,''), ' ', COALESCE(p.lastName,''))) AS playerName,
-          COALESCE(p.teamId, me.teamId) AS teamId,
+          COALESCE(p.idTeam, me.teamId) AS teamId,
           t.name AS teamName,
           i.secureUrl AS teamLogo,
-  
+
           SUM(CASE WHEN me.eventType = 'YELLOW' THEN 1 ELSE 0 END) AS yellows,
           SUM(CASE WHEN me.eventType = 'RED' THEN 1 ELSE 0 END) AS reds,
-          COUNT(*) AS totalCards
+          COUNT(*) AS totalCards,
+
+          CASE 
+            WHEN ps.id IS NOT NULL THEN 1
+            ELSE 0
+          END AS hasSuspension,
+
+          ps.suspensionType,
+          ps.status AS suspensionStatus,
+          ps.unitType AS suspensionUnitType,
+          ps.fromUnitValue AS suspensionFromDate,
+          ps.untilUnitValue AS suspensionUntilDate,
+          ps.matchesToServe,
+
+          CASE
+            WHEN ps.id IS NULL THEN NULL
+            WHEN ps.unitType = 'MATCHDAY' THEN CONCAT('Fecha ', ps.fromUnitValue)
+            WHEN ps.unitType = 'ROUND' THEN CONCAT('Ronda ', ps.fromUnitValue)
+            ELSE NULL
+          END AS suspensionLabel
+
         FROM match_events me
-        INNER JOIN match_reports mr ON mr.id = me.reportId
-        LEFT JOIN players p ON p.id = me.playerId
-        LEFT JOIN teams t ON t.id = COALESCE(p.teamId, me.teamId)
-        LEFT JOIN image i ON i.id = t.idLogo
+
+        INNER JOIN match_reports mr 
+          ON mr.id = me.reportId
+
+        LEFT JOIN players p 
+          ON p.id = me.playerId
+
+        LEFT JOIN teams t 
+          ON t.id = COALESCE(p.idTeam, me.teamId)
+
+        LEFT JOIN image i 
+          ON i.id = t.idLogo
+
+        INNER JOIN player_tournament_suspensions ps
+          ON ps.playerId = me.playerId
+          AND ps.tournamentId = mr.tournamentId
+          AND ps.status = 'ACTIVE'
+
         WHERE mr.tournamentId = ?
           AND me.playerId IS NOT NULL
           AND me.eventType IN ('YELLOW', 'RED')
-        GROUP BY me.playerId, playerName, teamId, teamName, teamLogo
-        ORDER BY totalCards DESC, reds DESC, yellows DESC, playerName ASC
+
+        GROUP BY 
+          me.playerId,
+          playerName,
+          teamId,
+          teamName,
+          teamLogo,
+          ps.id,
+          ps.suspensionType,
+          ps.status,
+          ps.unitType,
+          ps.fromUnitValue,
+          ps.untilUnitValue,
+          ps.matchesToServe
+
+        ORDER BY 
+          totalCards DESC, 
+          reds DESC, 
+          yellows DESC, 
+          playerName ASC
+
         LIMIT 10;
         `,
         [tournamentId],
