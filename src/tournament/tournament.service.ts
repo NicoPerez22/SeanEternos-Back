@@ -741,7 +741,7 @@ export class TournamentService {
         LEFT JOIN image i 
           ON i.id = t.idLogo
 
-        INNER JOIN player_tournament_suspensions ps
+        LEFT JOIN player_tournament_suspensions ps
           ON ps.playerId = me.playerId
           AND ps.tournamentId = mr.tournamentId
           AND ps.status = 'ACTIVE'
@@ -765,12 +765,11 @@ export class TournamentService {
           ps.matchesToServe
 
         ORDER BY 
-          totalCards DESC, 
-          reds DESC, 
-          yellows DESC, 
+          teamName DESC,
+          totalCards DESC,
+          reds DESC,
+          yellows DESC,
           playerName ASC
-
-        LIMIT 10;
         `,
         [tournamentId],
       );

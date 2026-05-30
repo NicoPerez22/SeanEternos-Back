@@ -552,16 +552,16 @@ export class PlayerService {
   ) {
     try {
       const reviewNote = dto.reviewNote ?? null;
-  
+
       const result = await this.dataSource.query(
         `CALL sp_review_transfer_offer(?, ?, ?, ?)`,
         [offerId, adminId, dto.action, reviewNote],
       );
-  
+
       const first = result?.[0];
       const rows = Array.isArray(first?.[0]) ? first[0] : first;
       const row = rows?.[0];
-  
+
       return { ok: true, data: row ?? rows ?? result };
     } catch (err: any) {
       this.handleMysqlSpError(err);
@@ -814,5 +814,73 @@ export class PlayerService {
       },
       data,
     };
+  }
+
+  async getInjury() {
+    const apiResponse = new ApiResponse<Player>();
+
+    try {
+      const players = await this.dataSource.query(
+        `
+        SELECT
+          pu.*,
+          p.name,
+          p.lastName,
+          p.idTeam,
+          t.name AS teamName,
+          t.idLogo AS teamIdLogo
+        FROM player_unavailability pu
+        INNER JOIN players p ON p.id = pu.playerId
+        LEFT JOIN teams t ON t.id = p.idTeam
+        WHERE pu.reason = 'INJURY'
+        `,
+      );
+
+      if (!players?.length) {
+        return {
+          ...apiResponse,
+          data: null,
+          httpCode: HttpStatus.NOT_FOUND,
+          message: 'No existen lesiones registradas',
+        };
+      }
+
+      const getTeamLogo = this.createLogoCacheLoader();
+      const playersWithTeam = await Promise.all(
+        players.map(async (row: any) => {
+          const { teamName, teamIdLogo, ...player } = row;
+          const idTeam =
+            player.teamId !== null && player.teamId !== undefined
+              ? Number(player.teamId)
+              : null;
+
+          return {
+            ...player,
+            team:
+              idTeam !== null
+                ? {
+                    id: idTeam,
+                    name: teamName ?? '',
+                    logo: await getTeamLogo(idTeam),
+                  }
+                : null,
+          };
+        }),
+      );
+
+      return {
+        ...apiResponse,
+        data: playersWithTeam,
+        httpCode: HttpStatus.OK,
+        message: 'Lesiones obtenidas correctamente',
+      };
+    } catch (error) {
+      return {
+        ...apiResponse,
+        data: null,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: `Error al obtener las lesiones: ${error.message}`,
+      };
+    }
   }
 }
