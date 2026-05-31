@@ -34,7 +34,7 @@ export class PlayerController {
     return this.playerService.getPlayersWithTeams();
   }
 
-  @Get('idTeam/:id')
+  @Get('teamId/:id')
   getPlayerByIdTeam(@Param('id', ParseIntPipe) id: number) {
     return this.playerService.getPLayersByIdTeams(id);
   }
