@@ -153,7 +153,11 @@ export class TournamentController {
   async preview(@Body() dto: any) {
     return this.tournamentService.createDraft(dto);
   }
-  
+
+  @Post('null-match')
+  async nullMatch(@Body() dto: any) {
+    return this.tournamentService.nullMatch(dto);
+  }
 
   // @Post('match-report-drafts')
   // create(@Body() dto: any) {

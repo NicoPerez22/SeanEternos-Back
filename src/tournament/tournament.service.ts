@@ -1807,4 +1807,13 @@ export class TournamentService {
     const row = result?.[0]?.[0];
     return { message: 'Draft revisado', data: row };
   }
+
+  async nullMatch(dto: any) {
+    const result: any = await this.dataSource.query(
+      'CALL sp_mark_round_as_null_match(?, ?, ?, ?)',
+      [dto.idRound, dto.tournamentId, dto.adminId, dto.reviewNote ?? null],
+    );
+
+    return { message: 'Partido marcado como nulo', data: result?.[0]?.[0] };
+  }
 }
