@@ -20,6 +20,36 @@ export class TournamentController {
     return this.tournamentService.getFormats();
   }
 
+  @Get('seasons/:seasonId/weeks')
+  getWeeks(@Param('seasonId', ParseIntPipe) seasonId: number) {
+    return this.tournamentService.getWeeks(seasonId);
+  }
+
+  @Post('season-weeks/:weekId/assignments')
+  addMatchdaysToWeek(
+    @Param('weekId', ParseIntPipe) weekId: number,
+    @Body() dto: any,
+  ) {
+    return this.tournamentService.addAssignmentsToWeek(weekId, dto);
+  }
+
+  @Delete('season-weeks/assignments/:assignmentId')
+  removeAssignmentFromWeek(
+    @Param('assignmentId', ParseIntPipe) assignmentId: number,
+  ) {
+    return this.tournamentService.removeAssignmentFromWeek(assignmentId);
+  }
+
+  @Delete('season-weeks/:weekId')
+  deleteWeek(@Param('weekId', ParseIntPipe) weekId: number) {
+    return this.tournamentService.deleteWeek(weekId);
+  }
+
+  @Get('rounds/summary')
+  getRoundsSummary(@Query('idTournament', ParseIntPipe) idTournament: number) {
+    return this.tournamentService.getRoundsSummary(idTournament);
+  }
+
   @Get('admin/match-report-drafts')
   async adminListDrafts(
     @Query('status') status?: string,
@@ -157,6 +187,11 @@ export class TournamentController {
   @Post('null-match')
   async nullMatch(@Body() dto: any) {
     return this.tournamentService.nullMatch(dto);
+  }
+
+  @Post('/weeks')
+  async createWeek(@Body() dto: any) {
+    return this.tournamentService.createWeek(dto);
   }
 
   // @Post('match-report-drafts')

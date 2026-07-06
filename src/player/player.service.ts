@@ -822,18 +822,26 @@ export class PlayerService {
     try {
       const players = await this.dataSource.query(
         `
-        SELECT
+      SELECT
           pu.*,
           p.name,
           p.lastName,
           p.idTeam,
           t.name AS teamName,
           t.idLogo AS teamIdLogo
-        FROM player_unavailability pu
-        INNER JOIN players p ON p.id = pu.playerId
-        LEFT JOIN teams t ON t.id = p.idTeam
-        WHERE pu.reason = 'INJURY'
-        `,
+      FROM player_unavailability pu
+      INNER JOIN players p
+          ON p.id = pu.playerId
+      LEFT JOIN teams t
+          ON t.id = p.idTeam
+      INNER JOIN tournament tr
+          ON tr.id = pu.sourceTournamentId
+      WHERE pu.reason = 'INJURY'
+      AND pu.cancelledAt IS NULL
+      AND fn_get_current_week(tr.seasonId) >= pu.startWeekNumber
+      AND fn_get_current_week(tr.seasonId)
+          < (pu.startWeekNumber + pu.durationWeeks)
+      `,
       );
 
       if (!players?.length) {

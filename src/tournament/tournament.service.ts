@@ -1816,4 +1816,468 @@ export class TournamentService {
 
     return { message: 'Partido marcado como nulo', data: result?.[0]?.[0] };
   }
+
+  async addAssignmentsToWeek(seasonWeekId: number, dto: any) {
+    const apiResponse = new ApiResponse<any>();
+
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Verificar que exista la semana
+      const week = await queryRunner.query(
+        `
+        SELECT id
+        FROM season_weeks
+        WHERE id = ?
+        `,
+        [seasonWeekId],
+      );
+
+      if (!week.length) {
+        throw new Error('La semana seleccionada no existe.');
+      }
+
+      for (const assignment of dto.assignments) {
+        // Verificar que exista el torneo
+        const tournament = await queryRunner.query(
+          `
+          SELECT id
+          FROM tournament
+          WHERE id = ?
+          `,
+          [assignment.tournamentId],
+        );
+
+        if (!tournament.length) {
+          throw new Error(`El torneo ${assignment.tournamentId} no existe.`);
+        }
+
+        // Validar que esa fecha/ronda exista realmente
+        if (assignment.stageType === 'GROUP') {
+          const roundExists = await queryRunner.query(
+            `
+              SELECT 1
+              FROM rounds
+              WHERE tournamentId = ?
+                AND matchday = ?
+              LIMIT 1
+              `,
+            [assignment.tournamentId, assignment.stageNumber],
+          );
+
+          if (!roundExists.length) {
+            throw new Error(
+              `No existe la fecha ${assignment.stageNumber} para el torneo ${assignment.tournamentId}.`,
+            );
+          }
+        } else {
+          const roundExists = await queryRunner.query(
+            `
+              SELECT 1
+              FROM rounds
+              WHERE tournamentId = ?
+                AND stage = 'KO'
+                AND round = ?
+              LIMIT 1
+              `,
+            [assignment.tournamentId, assignment.stageNumber],
+          );
+
+          if (!roundExists.length) {
+            throw new Error(
+              `No existe la ronda ${assignment.stageNumber} para el torneo ${assignment.tournamentId}.`,
+            );
+          }
+        }
+
+        // Evitar duplicados
+        const exists = await queryRunner.query(
+          `
+          SELECT id
+          FROM season_week_assignments
+          WHERE seasonWeekId = ?
+          AND tournamentId = ?
+          AND stageType = ?
+          AND stageNumber = ?
+          `,
+          [
+            seasonWeekId,
+            assignment.tournamentId,
+            assignment.stageType,
+            assignment.stageNumber,
+          ],
+        );
+
+        if (exists.length) {
+          continue;
+        }
+
+        // Insertar asignación
+        await queryRunner.query(
+          `
+          INSERT INTO season_week_assignments
+          (
+              seasonWeekId,
+              tournamentId,
+              stageType,
+              stageNumber
+          )
+          VALUES
+          (
+              ?,
+              ?,
+              ?,
+              ?
+          )
+          `,
+          [
+            seasonWeekId,
+            assignment.tournamentId,
+            assignment.stageType,
+            assignment.stageNumber,
+          ],
+        );
+      }
+
+      await queryRunner.commitTransaction();
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: 'Asignaciones guardadas correctamente.',
+        data: null,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: error.message,
+        data: null,
+      };
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async getWeeks(seasonId: number) {
+    const apiResponse = new ApiResponse<any>();
+
+    try {
+      // Obtener semanas
+      const weeks = await this.dataSource.query(
+        `
+        SELECT
+            id,
+            weekNumber,
+            startDate,
+            endDate
+        FROM season_weeks
+        WHERE seasonId = ?
+        ORDER BY weekNumber
+        `,
+        [seasonId],
+      );
+
+      // Obtener todas las asignaciones
+      const assignments = await this.dataSource.query(
+        `
+        SELECT
+            swa.id,
+            swa.seasonWeekId,
+            swa.tournamentId,
+            t.name AS tournamentName,
+            swa.stageType,
+            swa.stageNumber
+        FROM season_week_assignments swa
+        INNER JOIN tournament t
+            ON t.id = swa.tournamentId
+        INNER JOIN season_weeks sw
+            ON sw.id = swa.seasonWeekId
+        WHERE sw.seasonId = ?
+        ORDER BY
+            sw.weekNumber,
+            t.name,
+            swa.stageNumber
+        `,
+        [seasonId],
+      );
+
+      // Agrupar asignaciones por semana
+      const result = weeks.map((week) => ({
+        ...week,
+        assignments: assignments.filter((a) => a.seasonWeekId === week.id),
+      }));
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: 'Semanas obtenidas correctamente.',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: error.message,
+        data: null,
+      };
+    }
+  }
+
+  async getRoundsSummary(idTournament: number) {
+    const tournament = await this.tournamentRepository.findOne({
+      where: { id: idTournament },
+    });
+
+    if (!tournament) {
+      return {
+        message: 'No existe el torneo',
+        data: null,
+      };
+    }
+
+    const rows: any[] = await this.dataSource.query(
+      `
+      SELECT
+        r.tournamentId,
+        t.name AS tournamentName,
+        t.logo AS tournamentLogo,
+        r.matchday AS matchday,
+        NULL AS round
+      FROM rounds r
+      INNER JOIN tournament t ON t.id = r.tournamentId
+      WHERE r.tournamentId = ?
+        AND r.stage = 'GROUP'
+        AND r.matchday IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM season_week_assignments swa
+          WHERE swa.tournamentId = r.tournamentId
+            AND swa.stageType = 'GROUP'
+            AND swa.stageNumber = r.matchday
+        )
+      GROUP BY r.tournamentId, t.name, t.logo, r.matchday
+
+      UNION ALL
+
+      SELECT
+        r.tournamentId,
+        t.name AS tournamentName,
+        t.logo AS tournamentLogo,
+        NULL AS matchday,
+        r.round AS round
+      FROM rounds r
+      INNER JOIN tournament t ON t.id = r.tournamentId
+      WHERE r.tournamentId = ?
+        AND r.stage = 'KO'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM season_week_assignments swa
+          WHERE swa.tournamentId = r.tournamentId
+            AND swa.stageType = 'KO'
+            AND swa.stageNumber = r.round
+        )
+      GROUP BY r.tournamentId, t.name, t.logo, r.round
+
+      ORDER BY matchday ASC, round ASC
+      `,
+      [idTournament, idTournament],
+    );
+
+    return { message: 'Rondas obtenidas', data: rows };
+  }
+
+  async createWeek(dto: any) {
+    const apiResponse = new ApiResponse<any>();
+
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Validar que exista la temporada
+      const season = await queryRunner.query(
+        `
+        SELECT id
+        FROM seasons
+        WHERE id = ?
+        `,
+        [dto.seasonId],
+      );
+
+      if (!season.length) {
+        throw new Error('La temporada no existe.');
+      }
+
+      // Validar que no exista el mismo número de semana
+      const exists = await queryRunner.query(
+        `
+        SELECT id
+        FROM season_weeks
+        WHERE seasonId = ?
+          AND weekNumber = ?
+        `,
+        [dto.seasonId, dto.weekNumber],
+      );
+
+      if (exists.length) {
+        throw new Error(
+          `La semana ${dto.weekNumber} ya existe para esta temporada.`,
+        );
+      }
+
+      // Validar fechas
+      if (new Date(dto.startDate) > new Date(dto.endDate)) {
+        throw new Error(
+          'La fecha de inicio no puede ser mayor que la fecha de fin.',
+        );
+      }
+
+      // Crear semana
+      const result = await queryRunner.query(
+        `
+        INSERT INTO season_weeks
+        (
+          seasonId,
+          weekNumber,
+          startDate,
+          endDate
+        )
+        VALUES
+        (
+          ?,
+          ?,
+          ?,
+          ?
+        )
+        `,
+        [dto.seasonId, dto.weekNumber, dto.startDate, dto.endDate],
+      );
+
+      await queryRunner.commitTransaction();
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.CREATED,
+        message: 'Semana creada correctamente.',
+        data: {
+          id: result.insertId,
+        },
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: error.message,
+        data: null,
+      };
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async removeAssignmentFromWeek(assignmentId: number) {
+    const apiResponse = new ApiResponse<any>();
+
+    try {
+      const result: any = await this.dataSource.query(
+        `
+        DELETE FROM season_week_assignments
+        WHERE id = ?
+        `,
+        [assignmentId],
+      );
+
+      if (!result.affectedRows) {
+        return {
+          ...apiResponse,
+          httpCode: HttpStatus.NOT_FOUND,
+          message: 'La asignación no existe.',
+          data: null,
+        };
+      }
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: 'Fecha eliminada de la semana correctamente.',
+        data: null,
+      };
+    } catch (error: any) {
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: error.message,
+        data: null,
+      };
+    }
+  }
+
+  async deleteWeek(weekId: number) {
+    const apiResponse = new ApiResponse<any>();
+
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const week = await queryRunner.query(
+        `
+        SELECT id
+        FROM season_weeks
+        WHERE id = ?
+        `,
+        [weekId],
+      );
+
+      if (!week.length) {
+        throw new Error('La semana no existe.');
+      }
+
+      await queryRunner.query(
+        `
+        DELETE FROM season_week_assignments
+        WHERE seasonWeekId = ?
+        `,
+        [weekId],
+      );
+
+      await queryRunner.query(
+        `
+        DELETE FROM season_weeks
+        WHERE id = ?
+        `,
+        [weekId],
+      );
+
+      await queryRunner.commitTransaction();
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.OK,
+        message: 'Semana eliminada correctamente.',
+        data: null,
+      };
+    } catch (error: any) {
+      await queryRunner.rollbackTransaction();
+
+      return {
+        ...apiResponse,
+        httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: error.message,
+        data: null,
+      };
+    } finally {
+      await queryRunner.release();
+    }
+  }
 }
