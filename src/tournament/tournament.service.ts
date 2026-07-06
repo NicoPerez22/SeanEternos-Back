@@ -1855,16 +1855,17 @@ export class TournamentService {
           throw new Error(`El torneo ${assignment.tournamentId} no existe.`);
         }
 
-        // Validar que esa fecha/ronda exista realmente
+        // Validar que exista la fecha/ronda
         if (assignment.stageType === 'GROUP') {
           const roundExists = await queryRunner.query(
             `
-              SELECT 1
-              FROM rounds
-              WHERE tournamentId = ?
-                AND matchday = ?
-              LIMIT 1
-              `,
+            SELECT 1
+            FROM rounds
+            WHERE tournamentId = ?
+              AND stage = 'GROUP'
+              AND matchday = ?
+            LIMIT 1
+            `,
             [assignment.tournamentId, assignment.stageNumber],
           );
 
@@ -1876,13 +1877,13 @@ export class TournamentService {
         } else {
           const roundExists = await queryRunner.query(
             `
-              SELECT 1
-              FROM rounds
-              WHERE tournamentId = ?
-                AND stage = 'KO'
-                AND round = ?
-              LIMIT 1
-              `,
+            SELECT 1
+            FROM rounds
+            WHERE tournamentId = ?
+              AND stage = 'KO'
+              AND round = ?
+            LIMIT 1
+            `,
             [assignment.tournamentId, assignment.stageNumber],
           );
 
@@ -1899,9 +1900,9 @@ export class TournamentService {
           SELECT id
           FROM season_week_assignments
           WHERE seasonWeekId = ?
-          AND tournamentId = ?
-          AND stageType = ?
-          AND stageNumber = ?
+            AND tournamentId = ?
+            AND stageType = ?
+            AND stageNumber = ?
           `,
           [
             seasonWeekId,
@@ -1911,35 +1912,55 @@ export class TournamentService {
           ],
         );
 
-        if (exists.length) {
-          continue;
-        }
-
-        // Insertar asignación
-        await queryRunner.query(
-          `
-          INSERT INTO season_week_assignments
-          (
+        if (!exists.length) {
+          // Insertar asignación
+          await queryRunner.query(
+            `
+            INSERT INTO season_week_assignments
+            (
               seasonWeekId,
               tournamentId,
               stageType,
               stageNumber
-          )
-          VALUES
-          (
-              ?,
-              ?,
-              ?,
-              ?
-          )
-          `,
-          [
-            seasonWeekId,
-            assignment.tournamentId,
-            assignment.stageType,
-            assignment.stageNumber,
-          ],
-        );
+            )
+            VALUES (?, ?, ?, ?)
+            `,
+            [
+              seasonWeekId,
+              assignment.tournamentId,
+              assignment.stageType,
+              assignment.stageNumber,
+            ],
+          );
+        }
+
+        // ============================
+        // ACTUALIZAR LAS ROUNDS
+        // ============================
+
+        if (assignment.stageType === 'GROUP') {
+          await queryRunner.query(
+            `
+            UPDATE rounds
+            SET seasonWeekId = ?
+            WHERE tournamentId = ?
+              AND stage = 'GROUP'
+              AND matchday = ?
+            `,
+            [seasonWeekId, assignment.tournamentId, assignment.stageNumber],
+          );
+        } else {
+          await queryRunner.query(
+            `
+            UPDATE rounds
+            SET seasonWeekId = ?
+            WHERE tournamentId = ?
+              AND stage = 'KO'
+              AND round = ?
+            `,
+            [seasonWeekId, assignment.tournamentId, assignment.stageNumber],
+          );
+        }
       }
 
       await queryRunner.commitTransaction();
