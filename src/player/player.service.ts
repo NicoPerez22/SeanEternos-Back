@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  NotFoundException,
+  ConflictException,
   HttpStatus,
   Injectable,
   InternalServerErrorException,
@@ -73,7 +75,9 @@ export class PlayerService {
         lastName: player.lastName,
         valoration: player.valoration,
         photo: player.photo,
-        team: player.teamId,
+        team: { id: Number(player.teamId) },
+        idTeam: Number(player.teamId),
+        isTransfer: false,
         isHabilitado: player.isHabilitado,
         position: player.position,
       });
@@ -92,6 +96,23 @@ export class PlayerService {
         httpCode: HttpStatus.INTERNAL_SERVER_ERROR,
         message: `Error al crear el equipo: ${error.message}`,
       };
+    }
+  }
+
+  async deletePlayer(id: number) {
+    try {
+      const result = await this.playerRepository.delete(id);
+      if (!result.affected) {
+        throw new NotFoundException('El jugador no existe');
+      }
+      return {
+        data: { id },
+        httpCode: HttpStatus.OK,
+        message: 'Jugador eliminado con éxito',
+      };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      throw new ConflictException('No se pudo eliminar el jugador. Puede tener registros asociados.');
     }
   }
 

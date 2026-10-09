@@ -1,13 +1,18 @@
+import { UserService } from 'src/user/user.service';
+import { AuthGuard } from 'src/auth/auth.guard';
 import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
   Patch,
   Post,
   Query,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import { PlayerService } from './player.service';
 import {
@@ -17,7 +22,7 @@ import {
 
 @Controller('player')
 export class PlayerController {
-  constructor(private readonly playerService: PlayerService) {}
+  constructor(private readonly playerService: PlayerService, private readonly userService: UserService) {}
 
   @Post('transfer/offers')
   create(@Body() dto: CreateTransferOfferDto) {
@@ -40,7 +45,9 @@ export class PlayerController {
   }
 
   @Post()
-  createTeam(@Body() newTeam: any) {
+  @UseGuards(AuthGuard)
+  async createTeam(@Body() newTeam: any, @Req() request: any) {
+    await this.requireAdmin(request);
     return this.playerService.createPlayer(newTeam);
   }
 
@@ -59,8 +66,24 @@ export class PlayerController {
   }
 
   @Patch(':id')
-  updatePlayer(@Param('id', ParseIntPipe) id: number, @Body() player: any) {
+  @UseGuards(AuthGuard)
+  async updatePlayer(@Param('id', ParseIntPipe) id: number, @Body() player: any, @Req() request: any) {
+    await this.requireAdmin(request);
     return this.playerService.updatePlayer(id, player);
+  }
+
+  @Delete(':id')
+  @UseGuards(AuthGuard)
+  async deletePlayer(@Param('id', ParseIntPipe) id: number, @Req() request: any) {
+    await this.requireAdmin(request);
+    return this.playerService.deletePlayer(id);
+  }
+
+  private async requireAdmin(request: any): Promise<void> {
+    const user = request.user?.email ? await this.userService.findOneByEmail(request.user.email) : null;
+    if (Number(user?.idRol) !== 1) {
+      throw new ForbiddenException('Solo los administradores pueden gestionar jugadores');
+    }
   }
 
   @Get('transfer/:id/:idTeam')

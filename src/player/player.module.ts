@@ -1,3 +1,4 @@
+import { UserModule } from 'src/user/user.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PlayerController } from './player.controller';
@@ -8,7 +9,7 @@ import { Team } from 'src/team/entity/team.entity';
 import { ImagesService } from 'shared/services/images/images.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Player, Image, Team])],
+  imports: [UserModule, TypeOrmModule.forFeature([Player, Image, Team])],
   controllers: [PlayerController],
   providers: [PlayerService, ImagesService],
 })
