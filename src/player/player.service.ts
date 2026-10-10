@@ -265,59 +265,59 @@ export class PlayerService {
     const apiResponse = new ApiResponse<any[]>();
 
     try {
-      const players = await this.playerRepository.find({
-        relations: ['team'],
-        order: { valoration: 'DESC' },
-      });
+      // const players = await this.playerRepository.find({
+      //   relations: ['team'],
+      //   order: { valoration: 'DESC' },
+      // });
 
-      if (!players?.length) {
-        return {
-          ...apiResponse,
-          data: null,
-          httpCode: HttpStatus.OK,
-          message: 'No existen jugadores registrados',
-        };
-      }
+      // if (!players?.length) {
+      //   return {
+      //     ...apiResponse,
+      //     data: null,
+      //     httpCode: HttpStatus.OK,
+      //     message: 'No existen jugadores registrados',
+      //   };
+      // }
 
-      const playersWithTeam = await Promise.all(
-        players.map(async (player) => {
-          const {
-            id,
-            name,
-            lastName,
-            valoration,
-            photo,
-            isHabilitado,
-            position,
-            team,
-          } = player;
+      // const playersWithTeam = await Promise.all(
+      //   players.map(async (player) => {
+      //     const {
+      //       id,
+      //       name,
+      //       lastName,
+      //       valoration,
+      //       photo,
+      //       isHabilitado,
+      //       position,
+      //       team,
+      //     } = player;
 
-          const teamWithLogo = team
-            ? {
-                ...team,
-                logo: await this.imageService.getImage(team.idLogo),
-              }
-            : null;
+      //     const teamWithLogo = team
+      //       ? {
+      //           ...team,
+      //           logo: await this.imageService.getImage(team.idLogo),
+      //         }
+      //       : null;
 
-          return {
-            id,
-            name,
-            lastName,
-            valoration,
-            photo,
-            isHabilitado,
-            position,
-            team: teamWithLogo,
-            fullName: `${name} ${lastName}`,
-          };
-        }),
-      );
+      //     return {
+      //       id,
+      //       name,
+      //       lastName,
+      //       valoration,
+      //       photo,
+      //       isHabilitado,
+      //       position,
+      //       team: teamWithLogo,
+      //       fullName: `${name} ${lastName}`,
+      //     };
+      //   }),
+      // );
 
       return {
         ...apiResponse,
         httpCode: HttpStatus.OK,
         message: '',
-        data: playersWithTeam,
+        data: null,
       };
     } catch (error) {
       return {
