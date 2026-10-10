@@ -35,12 +35,22 @@ import { resolveEnvFilePath } from './config/resolve-env-file';
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
       synchronize: false,
       autoLoadEntities: true,
+
+      // Tiempo máximo para establecer una conexión inicial.
+      connectTimeout: 10_000,
+
       extra: {
-        connectionLimit: 10, // máximo 10 conexiones vivas
-        waitForConnections: true, // no lanzar error, poner en cola
-        queueLimit: 0, // sin límite de cola
-        connectTimeout: 10000, // 10 segundos
-        acquireTimeout: 10000, // timeout para adquirir conexión
+        connectionLimit: 10,
+        waitForConnections: true,
+        queueLimit: 0,
+
+        // Reducir conexiones que permanecen inactivas.
+        maxIdle: 2,
+        idleTimeout: 30_000,
+
+        // Mantener activo el socket TCP.
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10_000,
       },
     }),
   ],
