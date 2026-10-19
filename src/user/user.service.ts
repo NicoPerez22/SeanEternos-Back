@@ -31,6 +31,14 @@ export class UserService {
     return this.userRepository.update({ id }, dto);
   }
 
+  async replacePassword(id: number, previousPassword: string, password: string) {
+    const result = await this.userRepository.update(
+      { id, password: previousPassword },
+      { password },
+    );
+    return result.affected === 1;
+  }
+
   async findUser() {
     const apiResponse = new ApiResponse<ResponseUserDTO>();
     const resp = await this.userRepository.find();
