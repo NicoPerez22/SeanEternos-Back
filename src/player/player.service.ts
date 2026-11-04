@@ -859,9 +859,6 @@ export class PlayerService {
           ON tr.id = pu.sourceTournamentId
       WHERE pu.reason = 'INJURY'
       AND pu.cancelledAt IS NULL
-      AND fn_get_current_week(tr.seasonId) >= pu.startWeekNumber
-      AND fn_get_current_week(tr.seasonId)
-          < (pu.startWeekNumber + pu.durationWeeks)
       `,
       );
 
