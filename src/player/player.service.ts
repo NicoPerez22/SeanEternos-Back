@@ -112,7 +112,9 @@ export class PlayerService {
       };
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
-      throw new ConflictException('No se pudo eliminar el jugador. Puede tener registros asociados.');
+      throw new ConflictException(
+        'No se pudo eliminar el jugador. Puede tener registros asociados.',
+      );
     }
   }
 
@@ -841,46 +843,30 @@ export class PlayerService {
     const apiResponse = new ApiResponse<Player>();
 
     try {
-      const players = await this.dataSource.query(
-        `
-      SELECT
-          pu.*,
-          p.name,
-          p.lastName,
-          p.idTeam,
-          t.name AS teamName,
-          t.idLogo AS teamIdLogo
-      FROM player_unavailability pu
-      INNER JOIN players p
-          ON p.id = pu.playerId
-      LEFT JOIN teams t
-          ON t.id = p.idTeam
-      INNER JOIN tournament tr
-          ON tr.id = pu.sourceTournamentId
-      WHERE pu.reason = 'INJURY'
-        AND pu.cancelledAt IS NULL
-        AND fn_get_current_week(tr.seasonId)
-            < (pu.startWeekNumber + pu.durationWeeks)
-      `,
+      const result = await this.dataSource.query(
+        'CALL sp_get_injured_players()',
       );
 
-      if (!players?.length) {
+      // CALL devuelve los registros dentro del primer result set.
+      const players = result?.[0] ?? [];
+
+      if (!players.length) {
         return {
           ...apiResponse,
           data: null,
           httpCode: HttpStatus.NOT_FOUND,
-          message: 'No existen lesiones registradas',
+          message: 'No existen lesiones pendientes de cumplir',
         };
       }
 
       const getTeamLogo = this.createLogoCacheLoader();
+
       const playersWithTeam = await Promise.all(
         players.map(async (row: any) => {
           const { teamName, teamIdLogo, ...player } = row;
-          const idTeam =
-            player.teamId !== null && player.teamId !== undefined
-              ? Number(player.teamId)
-              : null;
+
+          // Nombre, ID y logo corresponden al equipo actual.
+          const idTeam = player.idTeam != null ? Number(player.idTeam) : null;
 
           return {
             ...player,
