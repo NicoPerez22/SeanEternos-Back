@@ -1,3 +1,7 @@
+## Procedimientos almacenados
+
+El SQL explícito y QueryBuilder se migraron a SP. Importar [sql/stored-procedures.sql](sql/stored-procedures.sql) antes de desplegar la API. Ver [instrucciones y requisitos](sql/README.md).
+
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>

@@ -1,3 +1,7 @@
+import {
+  callProcedureRows,
+  callProcedureCommand,
+} from 'shared/database/stored-procedure';
 import { Between, Repository, In, DataSource } from 'typeorm';
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { Team } from './entity/team.entity';
@@ -238,14 +242,15 @@ export class TeamService {
 
       await this.dataSource.transaction(async (manager) => {
         // Contar eventos (opcional, para mensaje)
-        const [{ total }] = await manager.query(
-          `SELECT COUNT(*) AS total FROM match_events WHERE teamId = ?`,
+        const [{ total }] = await callProcedureRows(
+          manager,
+          'sp_ap_count_team_events',
           [id],
         );
         deletedEventsCount = Number(total) || 0;
 
         // Borrar eventos asociados
-        await manager.query(`DELETE FROM match_events WHERE teamId = ?`, [id]);
+        await callProcedureCommand(manager, 'sp_ap_delete_team_events', [id]);
 
         // Borrar el equipo
         const deleteResult = await manager.delete('teams', { id });

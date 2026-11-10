@@ -1,4 +1,8 @@
 import {
+  callProcedureRows,
+  callProcedureCommand,
+} from 'shared/database/stored-procedure';
+import {
   BadRequestException,
   NotFoundException,
   ConflictException,
@@ -204,12 +208,15 @@ export class PlayerService {
     const apiResponse = new ApiResponse<any>();
 
     try {
-      const resp = await this.playerRepository
-        .createQueryBuilder()
-        .update(Player)
-        .set({ idTeam: null as any })
-        .where('idTeam IS NOT NULL')
-        .execute();
+      const result = await callProcedureCommand(
+        this.dataSource,
+        'sp_ap_remove_players_from_teams',
+      );
+      const resp = {
+        raw: result,
+        generatedMaps: [],
+        affected: result.affectedRows,
+      };
 
       return {
         ...apiResponse,
@@ -367,28 +374,10 @@ export class PlayerService {
   // Data access
   // -------------------------
   private async fetchPlayersWithTeams(): Promise<PlayerTeamRow[]> {
-    return this.dataSource.query(
-      `
-      SELECT
-        p.id,
-        p.name,
-        p.lastName,
-        p.valoration,
-        p.photo,
-        p.isHabilitado,
-        p.position,
-        p.idTeam,
-
-        t.id           AS teamId,
-        t.name         AS teamName,
-        t.abreviatura  AS teamAbreviatura,
-        t.idLogo       AS teamIdLogo,
-        t.userId       AS teamUserId
-      FROM players p
-      LEFT JOIN teams t ON t.id = p.idTeam
-      WHERE p.isTransfer = 1
-      ORDER BY p.valoration DESC, p.id ASC
-      `,
+    return callProcedureRows(
+      this.dataSource,
+      'sp_ap_get_transfer_players_with_teams',
+      [],
     );
   }
 
@@ -596,76 +585,17 @@ export class PlayerService {
     const safePage = Math.max(page, 1);
     const offset = (safePage - 1) * safeLimit;
 
-    const where = `o.status = 'pending'`;
-    const params: any[] = [];
-
-    const totalRows = await this.dataSource.query(
-      `SELECT COUNT(*) AS total FROM transfer_offers o WHERE ${where}`,
-      params,
+    const totalRows = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_count_transfer_offers',
+      [null, 'pending'],
     );
     const total = Number(totalRows?.[0]?.total ?? 0);
 
-    const rows = await this.dataSource.query(
-      `
-      SELECT
-        o.id,
-        o.status,
-        CASE o.status
-          WHEN 'pending'   THEN 'Pendiente'
-          WHEN 'approved'  THEN 'Aprobada'
-          WHEN 'rejected'  THEN 'Rechazada'
-          WHEN 'cancelled' THEN 'Cancelada'
-          ELSE o.status
-        END AS statusEs,
-  
-        o.fromTeamId,
-        tf.name AS fromTeamName,
-        imgFrom.secureUrl AS fromTeamLogoUrl,
-  
-        o.toTeamId,
-        tt.name AS toTeamName,
-        imgTo.secureUrl AS toTeamLogoUrl,
-  
-        -- Targets (array)
-        COALESCE(
-          JSON_ARRAYAGG(DISTINCT
-            CASE WHEN pT.id IS NULL THEN NULL
-            ELSE JSON_OBJECT('id', pT.id, 'name', pT.name, 'lastName', pT.lastName, 'teamId', pT.idTeam, 'valoration', pT.valoration)
-            END
-          ),
-          JSON_ARRAY()
-        ) AS targetPlayers,
-  
-        -- Offered (array)
-        COALESCE(
-          JSON_ARRAYAGG(DISTINCT
-            CASE WHEN pO.id IS NULL THEN NULL
-            ELSE JSON_OBJECT('id', pO.id, 'name', pO.name, 'lastName', pO.lastName, 'teamId', pO.idTeam, 'valoration', pO.valoration)
-            END
-          ),
-          JSON_ARRAY()
-        ) AS offeredPlayers
-  
-      FROM transfer_offers o
-      LEFT JOIN teams tf ON tf.id = o.fromTeamId
-      LEFT JOIN teams tt ON tt.id = o.toTeamId
-      LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
-      LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
-  
-      LEFT JOIN transfer_offer_targets tot ON tot.offerId = o.id
-      LEFT JOIN players pT ON pT.id = tot.targetPlayerId
-  
-      LEFT JOIN transfer_offer_players top ON top.offerId = o.id
-      LEFT JOIN players pO ON pO.id = top.offeredPlayerId
-  
-      WHERE ${where}
-      GROUP BY
-        o.id, o.status, o.fromTeamId, tf.name, imgFrom.secureUrl,
-        o.toTeamId, tt.name, imgTo.secureUrl
-      ORDER BY o.createdAt DESC
-      LIMIT ? OFFSET ?
-      `,
-      [...params, safeLimit, offset],
+    const rows = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_list_transfer_offers',
+      [null, 'pending', safeLimit, offset],
     );
 
     const data = (rows ?? []).map((r: any) => ({
@@ -723,93 +653,17 @@ export class PlayerService {
       throw new BadRequestException('status inválido');
     }
 
-    let where = `(o.fromTeamId = ? OR o.toTeamId = ?)`;
-    const params: any[] = [teamId, teamId];
-
-    if (status) {
-      where += ` AND o.status = ?`;
-      params.push(status);
-    }
-
-    const totalRows = await this.dataSource.query(
-      `SELECT COUNT(*) AS total
-     FROM transfer_offers o
-     WHERE ${where}`,
-      params,
+    const totalRows = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_count_transfer_offers',
+      [teamId, status ?? null],
     );
     const total = Number(totalRows?.[0]?.total ?? 0);
 
-    const rows = await this.dataSource.query(
-      `
-    SELECT
-      o.id,
-      o.status,
-      CASE o.status
-        WHEN 'pending'   THEN 'Pendiente'
-        WHEN 'approved'  THEN 'Aprobada'
-        WHEN 'rejected'  THEN 'Rechazada'
-        WHEN 'cancelled' THEN 'Cancelada'
-        ELSE o.status
-      END AS statusEs,
-
-      o.fromTeamId,
-      tf.name AS fromTeamName,
-      imgFrom.secureUrl AS fromTeamLogoUrl,
-
-      o.toTeamId,
-      tt.name AS toTeamName,
-      imgTo.secureUrl AS toTeamLogoUrl,
-
-      -- Targets (array)
-      (
-        SELECT COALESCE(
-          JSON_ARRAYAGG(
-            JSON_OBJECT(
-              'id', pT.id,
-              'name', pT.name,
-              'lastName', pT.lastName,
-              'teamId', pT.idTeam,
-              'valoration', pT.valoration
-            )
-          ),
-          JSON_ARRAY()
-        )
-        FROM transfer_offer_targets tot
-        JOIN players pT ON pT.id = tot.targetPlayerId
-        WHERE tot.offerId = o.id
-      ) AS targetPlayers,
-
-      -- Offered (array)
-      (
-        SELECT COALESCE(
-          JSON_ARRAYAGG(
-            JSON_OBJECT(
-              'id', pO.id,
-              'name', pO.name,
-              'lastName', pO.lastName,
-              'teamId', pO.idTeam,
-              'valoration', pO.valoration
-            )
-          ),
-          JSON_ARRAY()
-        )
-        FROM transfer_offer_players top
-        JOIN players pO ON pO.id = top.offeredPlayerId
-        WHERE top.offerId = o.id
-      ) AS offeredPlayers
-
-    FROM transfer_offers o
-    LEFT JOIN teams tf ON tf.id = o.fromTeamId
-    LEFT JOIN teams tt ON tt.id = o.toTeamId
-
-    LEFT JOIN image imgFrom ON imgFrom.id = tf.idLogo
-    LEFT JOIN image imgTo   ON imgTo.id   = tt.idLogo
-
-    WHERE ${where}
-    ORDER BY o.createdAt DESC
-    LIMIT ? OFFSET ?
-    `,
-      [...params, safeLimit, offset],
+    const rows = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_list_transfer_offers',
+      [teamId, status ?? null, safeLimit, offset],
     );
 
     // MySQL a veces devuelve JSON como string -> parse

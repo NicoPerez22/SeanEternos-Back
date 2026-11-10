@@ -1,4 +1,8 @@
 import {
+  callProcedureRows,
+  callProcedureCommand,
+} from 'shared/database/stored-procedure';
+import {
   BadRequestException,
   HttpException,
   HttpStatus,
@@ -127,51 +131,6 @@ export class TournamentService {
     private readonly imageService: ImagesService,
   ) {}
 
-  /**
-   * Partidos con state=1 cuentan en matchesPlayed aunque isNullMatch=1;
-   * puntos, V/E/D y goles solo desde partidos con nullM = 0.
-   */
-  private leagueStandingsStatsCte(): string {
-    return `
-    played_home AS (
-      SELECT r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga,
-        COALESCE(r.isNullMatch, 0) AS nullM
-      FROM rounds r
-      WHERE r.tournamentId = ?
-        AND r.state = 1
-        AND r.homeGoals IS NOT NULL
-        AND r.awayGoals IS NOT NULL
-    ),
-    played_away AS (
-      SELECT r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga,
-        COALESCE(r.isNullMatch, 0) AS nullM
-      FROM rounds r
-      WHERE r.tournamentId = ?
-        AND r.state = 1
-        AND r.homeGoals IS NOT NULL
-        AND r.awayGoals IS NOT NULL
-    ),
-    all_rows AS (
-      SELECT * FROM played_home
-      UNION ALL
-      SELECT * FROM played_away
-    ),
-    stats AS (
-      SELECT
-        teamId,
-        COUNT(*) AS matchesPlayed,
-        SUM(CASE WHEN nullM = 0 AND gf > ga THEN 1 ELSE 0 END) AS wins,
-        SUM(CASE WHEN nullM = 0 AND gf = ga THEN 1 ELSE 0 END) AS draws,
-        SUM(CASE WHEN nullM = 0 AND gf < ga THEN 1 ELSE 0 END) AS losses,
-        SUM(CASE WHEN nullM = 0 THEN gf ELSE 0 END) AS goalsFor,
-        SUM(CASE WHEN nullM = 0 THEN ga ELSE 0 END) AS goalsAgainst,
-        SUM(CASE WHEN nullM = 0 THEN gf - ga ELSE 0 END) AS goalDifference,
-        SUM(CASE WHEN nullM = 0 THEN CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END ELSE 0 END) AS points
-      FROM all_rows
-      GROUP BY teamId
-    )`;
-  }
-
   // -----------------------------------------------------
   // GET FORMATS
   // -----------------------------------------------------
@@ -225,11 +184,9 @@ export class TournamentService {
     );
     const tournamentId = result?.[0]?.[0]?.tournamentId;
 
-    await this.dataSource.query(
-      `INSERT INTO draft_status (tournamentId, status, message)
-     VALUES (?, 'pending', 'Draft pendiente')`,
-      [tournamentId],
-    );
+    await callProcedureCommand(this.dataSource, 'sp_ap_create_draft_status', [
+      tournamentId,
+    ]);
 
     // 3️⃣ Ejecutar draft en BACKGROUND si corresponde
     if (enableDraft === true) {
@@ -249,58 +206,47 @@ export class TournamentService {
 
     try {
       // Existe torneo?
-      const exists = await qr.query(
-        `SELECT id FROM tournament WHERE id = ? LIMIT 1`,
-        [tournamentId],
-      );
+      const exists = await callProcedureRows(qr, 'sp_ap_find_tournament', [
+        tournamentId,
+      ]);
       if (!exists?.length) throw new NotFoundException('Torneo no encontrado');
 
       // 1) match_events (depende de match_reports)
-      await qr.query(
-        `
-        DELETE me
-        FROM match_events me
-        JOIN match_reports mr ON mr.id = me.reportId
-        WHERE mr.tournamentId = ?
-        `,
-        [tournamentId],
-      );
-
-      // 2) match_reports (depende de rounds y torneo)
-      await qr.query(`DELETE FROM match_reports WHERE tournamentId = ?`, [
+      await callProcedureCommand(qr, 'sp_ap_delete_tournament_events', [
         tournamentId,
       ]);
 
-      // 3) transfers / transfer_offers si guardan tournamentId (si no tienen, sacalo)
-      // Si tu transfers tiene tournamentId:
-      // await qr.query(`DELETE FROM transfers WHERE tournamentId = ?`, [tournamentId]);
-
-      // Si tu transfer_offers tiene tournamentId:
-      // await qr.query(`DELETE FROM transfer_offers WHERE tournamentId = ?`, [tournamentId]);
+      // 2) match_reports (depende de rounds y torneo)
+      await callProcedureCommand(qr, 'sp_ap_delete_tournament_reports', [
+        tournamentId,
+      ]);
 
       // 4) rounds (FK tieId → ties)
-      await qr.query(`DELETE FROM rounds WHERE tournamentId = ?`, [
+      await callProcedureCommand(qr, 'sp_ap_delete_tournament_rounds', [
         tournamentId,
       ]);
 
       // 5) ties (FK tournamentId → tournament)
-      await qr.query(`DELETE FROM ties WHERE tournamentId = ?`, [tournamentId]);
+      await callProcedureCommand(qr, 'sp_ap_delete_tournament_ties', [
+        tournamentId,
+      ]);
 
       // 6) tournament_teams
-      await qr.query(`DELETE FROM tournament_teams WHERE tournamentId = ?`, [
+      await callProcedureCommand(qr, 'sp_ap_delete_tournament_teams', [
         tournamentId,
       ]);
 
       // 7) tournament_statistics
-      await qr.query(
-        `DELETE FROM tournament_statistics WHERE tournamentId = ?`,
-        [tournamentId],
-      );
-
-      // 8) Finalmente el torneo
-      const del: any = await qr.query(`DELETE FROM tournament WHERE id = ?`, [
+      await callProcedureCommand(qr, 'sp_ap_delete_tournament_statistics', [
         tournamentId,
       ]);
+
+      // 8) Finalmente el torneo
+      const del: any = await callProcedureCommand(
+        qr,
+        'sp_ap_delete_tournament',
+        [tournamentId],
+      );
 
       const affected = Number(del?.affectedRows ?? 0);
       if (!affected)
@@ -409,33 +355,9 @@ export class TournamentService {
   // STANDINGS (misma lógica que ranking liga: partido nulo suma PJ, no puntos)
   // -----------------------------------------------------
   async getStandings(tournamentId: number) {
-    return this.dataSource.query(
-      `
-      WITH ${this.leagueStandingsStatsCte().trim()}
-      SELECT
-        ? AS tournamentId,
-        t.id AS teamId,
-        t.name AS teamName,
-        img.secureUrl AS logoUrl,
-        img.publicId AS logoPublicId,
-        img.originalName AS logoOriginalName,
-        COALESCE(s.points, 0) AS points,
-        COALESCE(s.goalDifference, 0) AS goalDifference,
-        COALESCE(s.goalsFor, 0) AS goalsFor,
-        COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
-        COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
-        COALESCE(s.wins, 0) AS wins,
-        COALESCE(s.draws, 0) AS draws,
-        COALESCE(s.losses, 0) AS losses
-      FROM tournament_teams tt
-      JOIN teams t ON t.id = tt.teamsId
-      LEFT JOIN image img ON img.id = t.idLogo
-      LEFT JOIN stats s ON s.teamId = t.id
-      WHERE tt.tournamentId = ?
-      ORDER BY points DESC, goalDifference DESC, goalsFor DESC, teamName ASC;
-      `,
-      [tournamentId, tournamentId, tournamentId, tournamentId],
-    );
+    return callProcedureRows(this.dataSource, 'sp_ap_get_standings', [
+      tournamentId,
+    ]);
   }
 
   // -----------------------------------------------------
@@ -444,33 +366,10 @@ export class TournamentService {
   async getRankingLeague(tournamentId: number) {
     const apiResponse = new ApiResponse<any>();
 
-    const rows: any[] = await this.dataSource.query(
-      `
-    WITH ${this.leagueStandingsStatsCte().trim()}
-    SELECT
-      t.id AS teamId,
-      t.name AS teamName,
-
-      img.secureUrl AS logoUrl,
-      img.publicId AS logoPublicId,
-      img.originalName AS logoOriginalName,
-
-      COALESCE(s.points, 0) AS points,
-      COALESCE(s.goalDifference, 0) AS goalDifference,
-      COALESCE(s.goalsFor, 0) AS goalsFor,
-      COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
-      COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
-      COALESCE(s.wins, 0) AS wins,
-      COALESCE(s.draws, 0) AS draws,
-      COALESCE(s.losses, 0) AS losses
-    FROM tournament_teams tt
-    JOIN teams t ON t.id = tt.teamsId
-    LEFT JOIN image img ON img.id = t.idLogo
-    LEFT JOIN stats s ON s.teamId = t.id
-    WHERE tt.tournamentId = ?
-    ORDER BY points DESC, goalDifference DESC, goalsFor DESC, teamName ASC;
-    `,
-      [tournamentId, tournamentId, tournamentId],
+    const rows: any[] = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_get_ranking_league',
+      [tournamentId],
     );
 
     const tables = [
@@ -491,81 +390,10 @@ export class TournamentService {
   async getRankingGroups(tournamentId: number) {
     const apiResponse = new ApiResponse<any>();
 
-    const flatRows: any[] = await this.dataSource.query(
-      `
-    WITH teams_in_group AS (
-      SELECT DISTINCT r.groupNumber AS groupNumber, r.home AS teamId
-      FROM rounds r
-      WHERE r.tournamentId = ? AND r.groupNumber IS NOT NULL
-
-      UNION DISTINCT
-
-      SELECT DISTINCT r.groupNumber AS groupNumber, r.away AS teamId
-      FROM rounds r
-      WHERE r.tournamentId = ? AND r.groupNumber IS NOT NULL
-    ),
-    played AS (
-      SELECT r.groupNumber AS groupNumber, r.home AS teamId, r.homeGoals AS gf, r.awayGoals AS ga,
-        COALESCE(r.isNullMatch, 0) AS nullM
-      FROM rounds r
-      WHERE r.tournamentId = ?
-        AND r.groupNumber IS NOT NULL
-        AND r.state = 1
-        AND r.homeGoals IS NOT NULL
-        AND r.awayGoals IS NOT NULL
-
-      UNION ALL
-
-      SELECT r.groupNumber AS groupNumber, r.away AS teamId, r.awayGoals AS gf, r.homeGoals AS ga,
-        COALESCE(r.isNullMatch, 0) AS nullM
-      FROM rounds r
-      WHERE r.tournamentId = ?
-        AND r.groupNumber IS NOT NULL
-        AND r.state = 1
-        AND r.homeGoals IS NOT NULL
-        AND r.awayGoals IS NOT NULL
-    ),
-    stats AS (
-      SELECT
-        groupNumber,
-        teamId,
-        COUNT(*) AS matchesPlayed,
-        SUM(CASE WHEN nullM = 0 AND gf > ga THEN 1 ELSE 0 END) AS wins,
-        SUM(CASE WHEN nullM = 0 AND gf = ga THEN 1 ELSE 0 END) AS draws,
-        SUM(CASE WHEN nullM = 0 AND gf < ga THEN 1 ELSE 0 END) AS losses,
-        SUM(CASE WHEN nullM = 0 THEN gf ELSE 0 END) AS goalsFor,
-        SUM(CASE WHEN nullM = 0 THEN ga ELSE 0 END) AS goalsAgainst,
-        SUM(CASE WHEN nullM = 0 THEN gf - ga ELSE 0 END) AS goalDifference,
-        SUM(CASE WHEN nullM = 0 THEN CASE WHEN gf > ga THEN 3 WHEN gf = ga THEN 1 ELSE 0 END ELSE 0 END) AS points
-      FROM played
-      GROUP BY groupNumber, teamId
-    )
-    SELECT
-      tig.groupNumber AS groupNumber,
-      CONCAT('Grupo ', tig.groupNumber) AS groupName,
-
-      t.id AS teamId,
-      t.name AS teamName,
-
-      img.secureUrl AS logoUrl,
-      img.publicId AS logoPublicId,
-      img.originalName AS logoOriginalName,
-
-      COALESCE(s.points, 0) AS points,
-      COALESCE(s.goalDifference, 0) AS goalDifference,
-      COALESCE(s.goalsFor, 0) AS goalsFor,
-      COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
-      COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
-      COALESCE(s.wins, 0) AS wins,
-      COALESCE(s.draws, 0) AS draws,
-      COALESCE(s.losses, 0) AS losses
-    FROM teams_in_group tig
-    JOIN teams t ON t.id = tig.teamId
-    LEFT JOIN image img ON img.id = t.idLogo
-    LEFT JOIN stats s ON s.groupNumber = tig.groupNumber AND s.teamId = tig.teamId
-    ORDER BY tig.groupNumber ASC, points DESC, goalDifference DESC, goalsFor DESC, teamName ASC;
-    `,
-      [tournamentId, tournamentId, tournamentId, tournamentId],
+    const flatRows: any[] = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_get_ranking_groups',
+      [tournamentId],
     );
 
     const map = new Map<
@@ -613,12 +441,9 @@ export class TournamentService {
   // GLOBAL TOURNAMENT STATS (tournament_statistics view)
   // -----------------------------------------------------
   async getTournamentStats(tournamentId: number) {
-    const stats = await this.dataSource.query(
-      `
-      SELECT *
-      FROM tournament_statistics
-      WHERE tournamentId = ?;
-      `,
+    const stats = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_get_tournament_stats',
       [tournamentId],
     );
 
@@ -632,40 +457,10 @@ export class TournamentService {
     const apiResponse = new ApiResponse<any[]>();
 
     try {
-      const scorers = await this.dataSource.query(
-        `
-        SELECT
-          me.playerId,
-          TRIM(CONCAT(COALESCE(p.name,''), ' ', COALESCE(p.lastName,''))) AS playerName,
-          p.teamId AS teamId,
-          t.name AS teamName,
-          i.secureUrl AS teamLogo,
-  
-          COUNT(*) AS goals,
-  
-          (
-            SELECT COUNT(*)
-            FROM rounds r
-            WHERE r.tournamentId = ?
-              AND r.state = 1
-              AND (r.home = p.teamId OR r.away = p.teamId)
-          ) AS matchesPlayed
-  
-        FROM match_events me
-        INNER JOIN match_reports mr ON mr.id = me.reportId
-        LEFT JOIN players p ON p.id = me.playerId
-        LEFT JOIN teams t ON t.id = p.teamId
-        LEFT JOIN image i ON i.id = t.idLogo
-  
-        WHERE mr.tournamentId = ?
-          AND me.eventType = 'GOAL'
-          AND me.playerId IS NOT NULL
-  
-        GROUP BY me.playerId, playerName, teamId, teamName, teamLogo, matchesPlayed
-        ORDER BY goals DESC, matchesPlayed ASC, playerName ASC
-        LIMIT 10;
-        `,
-        [tournamentId, tournamentId],
+      const scorers = await callProcedureRows(
+        this.dataSource,
+        'sp_ap_get_scorers',
+        [tournamentId],
       );
 
       if (!scorers?.length) {
@@ -695,82 +490,9 @@ export class TournamentService {
     const apiResponse = new ApiResponse<any[]>();
 
     try {
-      const cards = await this.dataSource.query(
-        `
-        SELECT
-          me.playerId,
-          TRIM(CONCAT(COALESCE(p.name,''), ' ', COALESCE(p.lastName,''))) AS playerName,
-          COALESCE(p.idTeam, me.teamId) AS teamId,
-          t.name AS teamName,
-          i.secureUrl AS teamLogo,
-
-          SUM(CASE WHEN me.eventType = 'YELLOW' THEN 1 ELSE 0 END) AS yellows,
-          SUM(CASE WHEN me.eventType = 'RED' THEN 1 ELSE 0 END) AS reds,
-          COUNT(*) AS totalCards,
-
-          CASE 
-            WHEN ps.id IS NOT NULL THEN 1
-            ELSE 0
-          END AS hasSuspension,
-
-          ps.suspensionType,
-          ps.status AS suspensionStatus,
-          ps.unitType AS suspensionUnitType,
-          ps.fromUnitValue AS suspensionFromDate,
-          ps.untilUnitValue AS suspensionUntilDate,
-          ps.matchesToServe,
-
-          CASE
-            WHEN ps.id IS NULL THEN NULL
-            WHEN ps.unitType = 'MATCHDAY' THEN CONCAT('Fecha ', ps.fromUnitValue)
-            WHEN ps.unitType = 'ROUND' THEN CONCAT('Ronda ', ps.fromUnitValue)
-            ELSE NULL
-          END AS suspensionLabel
-
-        FROM match_events me
-
-        INNER JOIN match_reports mr 
-          ON mr.id = me.reportId
-
-        LEFT JOIN players p 
-          ON p.id = me.playerId
-
-        LEFT JOIN teams t 
-          ON t.id = COALESCE(p.idTeam, me.teamId)
-
-        LEFT JOIN image i 
-          ON i.id = t.idLogo
-
-        LEFT JOIN player_tournament_suspensions ps
-          ON ps.playerId = me.playerId
-          AND ps.tournamentId = mr.tournamentId
-          AND ps.status = 'ACTIVE'
-
-        WHERE mr.tournamentId = ?
-          AND me.playerId IS NOT NULL
-          AND me.eventType IN ('YELLOW', 'RED')
-
-        GROUP BY 
-          me.playerId,
-          playerName,
-          teamId,
-          teamName,
-          teamLogo,
-          ps.id,
-          ps.suspensionType,
-          ps.status,
-          ps.unitType,
-          ps.fromUnitValue,
-          ps.untilUnitValue,
-          ps.matchesToServe
-
-        ORDER BY 
-          teamName DESC,
-          totalCards DESC,
-          reds DESC,
-          yellows DESC,
-          playerName ASC
-        `,
+      const cards = await callProcedureRows(
+        this.dataSource,
+        'sp_ap_get_cards_leaders',
         [tournamentId],
       );
 
@@ -801,28 +523,10 @@ export class TournamentService {
   // TEAM STATS FOR SPECIFIC TOURNAMENT
   // -----------------------------------------------------
   async getTeamStats(teamId: number, tournamentId: number) {
-    const result = await this.dataSource.query(
-      `
-      WITH ${this.leagueStandingsStatsCte().trim()}
-      SELECT
-        ? AS tournamentId,
-        t.id AS teamId,
-        t.name AS teamName,
-        COALESCE(s.points, 0) AS points,
-        COALESCE(s.goalDifference, 0) AS goalDifference,
-        COALESCE(s.goalsFor, 0) AS goalsFor,
-        COALESCE(s.goalsAgainst, 0) AS goalsAgainst,
-        COALESCE(s.matchesPlayed, 0) AS matchesPlayed,
-        COALESCE(s.wins, 0) AS wins,
-        COALESCE(s.draws, 0) AS draws,
-        COALESCE(s.losses, 0) AS losses
-      FROM stats s
-      JOIN teams t ON t.id = s.teamId
-      INNER JOIN tournament_teams tt ON tt.teamsId = s.teamId AND tt.tournamentId = ?
-      WHERE s.teamId = ?
-      LIMIT 1;
-      `,
-      [tournamentId, tournamentId, tournamentId, tournamentId, teamId],
+    const result = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_get_team_stats',
+      [tournamentId, teamId],
     );
 
     return result[0] || null;
@@ -919,59 +623,10 @@ export class TournamentService {
     const apiResponse = new ApiResponse<any>();
 
     try {
-      const whereTournament =
-        tournamentId != null ? ' AND r.tournamentId = ?' : '';
-
-      const params: any[] =
-        tournamentId != null
-          ? [teamId, teamId, tournamentId]
-          : [teamId, teamId];
-
-      const rows: any[] = await this.dataSource.query(
-        `
-        SELECT
-          r.id           AS idRound,
-          r.tournamentId AS tournamentId,
-          t.name         AS tournamentName,
-          r.matchday     AS matchday,
-          r.groupNumber  AS groupNumber,
-          r.round        AS round,
-          r.state        AS state,
-          r.stage        AS stage,
-          r.tieId        AS tieId,
-          r.leg          AS leg,
-  
-          r.home         AS homeTeamId,
-          th.name        AS homeTeamName,
-          th.idLogo      AS homeIdLogo,
-          ih.secureUrl   AS homeLogoUrl,
-  
-          r.away         AS awayTeamId,
-          ta.name        AS awayTeamName,
-          ta.idLogo      AS awayIdLogo,
-          ia.secureUrl   AS awayLogoUrl,
-  
-          r.homeGoals    AS homeGoals,
-          r.awayGoals    AS awayGoals
-  
-        FROM rounds r
-        INNER JOIN tournament t ON t.id = r.tournamentId
-        INNER JOIN teams th ON th.id = r.home
-        INNER JOIN teams ta ON ta.id = r.away
-        LEFT JOIN image ih ON ih.id = th.idLogo
-        LEFT JOIN image ia ON ia.id = ta.idLogo
-  
-        WHERE (r.home = ? OR r.away = ?)
-        ${whereTournament}
-  
-        ORDER BY 
-          r.tournamentId ASC,
-          r.round ASC,
-          r.tieId ASC,
-          r.leg ASC,
-          r.id ASC
-        `,
-        params,
+      const rows: any[] = await callProcedureRows(
+        this.dataSource,
+        'sp_ap_get_rounds_by_team',
+        [teamId, tournamentId ?? null],
       );
 
       const resolveLogoUrl = this.createLogoUrlResolver();
@@ -1012,41 +667,9 @@ export class TournamentService {
     const apiResponse = new ApiResponse<any>();
 
     try {
-      const rows: any[] = await this.dataSource.query(
-        `
-        SELECT
-          t.id AS tieId,
-          t.round,
-  
-          t.teamA,
-          ta.name AS teamAName,
-          ta.idLogo AS teamAIdLogo,
-          ia.secureUrl AS teamALogo,
-  
-          t.teamB,
-          tb.name AS teamBName,
-          tb.idLogo AS teamBIdLogo,
-          ib.secureUrl AS teamBLogo,
-  
-          r.id AS matchId,
-          r.matchday,
-          r.home,
-          r.away,
-          r.homeGoals,
-          r.awayGoals,
-          r.state
-  
-        FROM ties t
-        JOIN rounds r ON r.tieId = t.id
-        JOIN teams ta ON ta.id = t.teamA
-        JOIN teams tb ON tb.id = t.teamB
-        LEFT JOIN image ia ON ia.id = ta.idLogo
-        LEFT JOIN image ib ON ib.id = tb.idLogo
-  
-        WHERE t.tournamentId = ?
-  
-        ORDER BY t.round ASC, t.id ASC, r.matchday ASC
-        `,
+      const rows: any[] = await callProcedureRows(
+        this.dataSource,
+        'sp_ap_get_ko_rounds',
         [tournamentId],
       );
 
@@ -1139,8 +762,9 @@ export class TournamentService {
   }
 
   async getDraftStatus(tournamentId: number) {
-    const result = await this.dataSource.query(
-      `SELECT * FROM draft_status WHERE tournamentId=?`,
+    const result = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_get_draft_status',
       [tournamentId],
     );
 
@@ -1155,7 +779,7 @@ export class TournamentService {
     const lockName = `draft:${tournamentId}`;
     try {
       // ---- Lock global por torneo (evita ejecuciones simultáneas)
-      const lock = await runner.query('SELECT GET_LOCK(?, 2) AS gotLock', [
+      const lock = await callProcedureRows(runner, 'sp_ap_acquire_draft_lock', [
         lockName,
       ]);
       const gotLock = lock?.[0]?.gotLock ?? lock?.[0]?.gotlock;
@@ -1168,40 +792,29 @@ export class TournamentService {
       await runner.startTransaction();
 
       // 1) Equipos del torneo
-      const teamRows: Array<{ teamId: number }> = await runner.query(
-        `SELECT teamsId AS teamId
-         FROM tournament_teams
-         WHERE tournamentId = ?
-         ORDER BY teamsId ASC`,
+      const teamRows: Array<{ teamId: number }> = await callProcedureRows(
+        runner,
+        'sp_ap_get_draft_teams',
         [tournamentId],
       );
       const teamIds = teamRows.map((t) => Number(t.teamId));
       if (teamIds.length === 0) throw new Error('No hay equipos en el torneo.');
 
       // 2) Limpiar logs (opcional)
-      await runner.query('DELETE FROM draft_log WHERE tournamentId = ?', [
+      await callProcedureCommand(runner, 'sp_ap_delete_draft_log', [
         tournamentId,
       ]);
 
       // 3) Liberar jugadores ya asignados a esos equipos (replica tu SP)
-      await runner.query(
-        `UPDATE players
-         SET idTeam = NULL
-         WHERE idTeam IN (
-           SELECT teamsId
-           FROM tournament_teams
-           WHERE tournamentId = ?
-         )`,
-        [tournamentId],
-      );
+      await callProcedureCommand(runner, 'sp_ap_release_draft_players', [
+        tournamentId,
+      ]);
 
       // 4) Pool de jugadores (solo columnas necesarias)
-      const playersRows: Array<Player> = await runner.query(
-        `SELECT id, valoration, position
-         FROM players
-         WHERE isHabilitado = 1
-           AND valoration BETWEEN 77 AND 94
-           AND idTeam IS NULL`,
+      const playersRows: Array<Player> = await callProcedureRows(
+        runner,
+        'sp_ap_get_draft_pool',
+        [],
       );
       const players: Player[] = playersRows.map((p) => ({
         id: Number(p.id),
@@ -1212,7 +825,7 @@ export class TournamentService {
       // 5) Draft en memoria
       const assignments = this.buildDraft(teamIds, players);
 
-      // 6) Persistir en batch (UPDATE CASE en chunks)
+      // 6) Persistir asignaciones mediante SP en lotes JSON
       await this.persistAssignments(runner, assignments);
 
       // 7) Log en batch
@@ -1234,7 +847,7 @@ export class TournamentService {
     } finally {
       // liberar lock aunque haya error
       try {
-        await runner.query('SELECT RELEASE_LOCK(?)', [lockName]);
+        await callProcedureRows(runner, 'sp_ap_release_draft_lock', [lockName]);
       } catch {}
       await runner.release();
     }
@@ -1248,7 +861,7 @@ export class TournamentService {
 
     try {
       // Lock por torneo
-      const lock = await runner.query('SELECT GET_LOCK(?, 2) AS gotLock', [
+      const lock = await callProcedureRows(runner, 'sp_ap_acquire_draft_lock', [
         lockName,
       ]);
       const gotLock = lock?.[0]?.gotLock ?? lock?.[0]?.gotlock;
@@ -1261,38 +874,29 @@ export class TournamentService {
       await runner.startTransaction();
 
       // Equipos del torneo
-      const teamRows: Array<{ teamId: number }> = await runner.query(
-        `SELECT teamsId AS teamId
-         FROM tournament_teams
-         WHERE tournamentId = ?
-         ORDER BY teamsId ASC`,
+      const teamRows: Array<{ teamId: number }> = await callProcedureRows(
+        runner,
+        'sp_ap_get_draft_teams',
         [tournamentId],
       );
       const teamIds = teamRows.map((t) => Number(t.teamId));
       if (teamIds.length === 0) throw new Error('No hay equipos en el torneo.');
 
       // Limpiar logs (opcional)
-      await runner.query('DELETE FROM draft_log WHERE tournamentId = ?', [
+      await callProcedureCommand(runner, 'sp_ap_delete_draft_log', [
         tournamentId,
       ]);
 
       // Liberar jugadores de esos equipos (como tu SP)
-      await runner.query(
-        `UPDATE players
-         SET idTeam = NULL
-         WHERE idTeam IN (
-           SELECT teamsId FROM tournament_teams WHERE tournamentId = ?
-         )`,
-        [tournamentId],
-      );
+      await callProcedureCommand(runner, 'sp_ap_release_draft_players', [
+        tournamentId,
+      ]);
 
       // Pool mínimo
-      const rows: Array<any> = await runner.query(
-        `SELECT id, valoration, position
-         FROM players
-         WHERE isHabilitado = 1
-           AND valoration BETWEEN 77 AND 94
-           AND idTeam IS NULL`,
+      const rows: Array<any> = await callProcedureRows(
+        runner,
+        'sp_ap_get_draft_pool',
+        [],
       );
 
       const players: Player[] = rows.map((r) => ({
@@ -1333,7 +937,7 @@ export class TournamentService {
       throw err;
     } finally {
       try {
-        await runner.query('SELECT RELEASE_LOCK(?)', [lockName]);
+        await callProcedureRows(runner, 'sp_ap_release_draft_lock', [lockName]);
       } catch {}
       await runner.release();
     }
@@ -1341,19 +945,9 @@ export class TournamentService {
 
   async getTeamsByRound(roundId: number) {
     try {
-      const rows = await this.dataSource.query(
-        `
-        SELECT
-          r.id        AS roundId,
-          r.home      AS homeId,
-          th.name     AS homeName,
-          r.away      AS awayId,
-          ta.name     AS awayName
-        FROM rounds r
-        INNER JOIN teams th ON th.id = r.home
-        INNER JOIN teams ta ON ta.id = r.away
-        WHERE r.id = ?
-        `,
+      const rows = await callProcedureRows(
+        this.dataSource,
+        'sp_ap_get_round_teams',
         [roundId],
       );
 
@@ -1629,7 +1223,7 @@ export class TournamentService {
   }
 
   // =========================================================
-  // Persistencia: UPDATE masivo en chunks
+  // Persistencia de asignaciones en lotes JSON
   // =========================================================
   private async persistAssignments(
     runner: QueryRunner,
@@ -1642,25 +1236,14 @@ export class TournamentService {
     for (let i = 0; i < assignments.length; i += chunkSize) {
       const chunk = assignments.slice(i, i + chunkSize);
 
-      const ids = chunk.map((a) => a.playerId);
-      const cases = chunk
-        .map((a) => `WHEN ${a.playerId} THEN ${a.teamId}`)
-        .join(' ');
-
-      const sql = `
-        UPDATE players
-        SET
-          idTeam = CASE id ${cases} END,
-          isTransfer = 0
-        WHERE id IN (${ids.join(',')})
-      `;
-
-      await runner.query(sql);
+      await callProcedureCommand(runner, 'sp_ap_persist_draft_assignments', [
+        JSON.stringify(chunk),
+      ]);
     }
   }
 
   // =========================================================
-  // Logs: INSERT batch
+  // Logs del draft en lotes JSON
   // =========================================================
   private async insertDraftLog(
     runner: QueryRunner,
@@ -1674,24 +1257,10 @@ export class TournamentService {
     for (let i = 0; i < assignments.length; i += chunkSize) {
       const chunk = assignments.slice(i, i + chunkSize);
 
-      const placeholders: string[] = [];
-      const values: any[] = [];
-
-      for (const a of chunk) {
-        placeholders.push("(?, ?, ?, 'ASSIGN', ?)");
-        values.push(
-          tournamentId,
-          a.teamId,
-          a.playerId,
-          `Jugador ${a.playerId} asignado al equipo ${a.teamId}`,
-        );
-      }
-
-      await runner.query(
-        `INSERT INTO draft_log (tournamentId, teamId, playerId, action, message)
-         VALUES ${placeholders.join(',')}`,
-        values,
-      );
+      await callProcedureCommand(runner, 'sp_ap_insert_draft_log', [
+        tournamentId,
+        JSON.stringify(chunk),
+      ]);
     }
   }
 
@@ -1827,12 +1396,9 @@ export class TournamentService {
 
     try {
       // Verificar que exista la semana
-      const week = await queryRunner.query(
-        `
-        SELECT id
-        FROM season_weeks
-        WHERE id = ?
-        `,
+      const week = await callProcedureRows(
+        queryRunner,
+        'sp_ap_find_season_week',
         [seasonWeekId],
       );
 
@@ -1842,12 +1408,9 @@ export class TournamentService {
 
       for (const assignment of dto.assignments) {
         // Verificar que exista el torneo
-        const tournament = await queryRunner.query(
-          `
-          SELECT id
-          FROM tournament
-          WHERE id = ?
-          `,
+        const tournament = await callProcedureRows(
+          queryRunner,
+          'sp_ap_find_tournament',
           [assignment.tournamentId],
         );
 
@@ -1857,15 +1420,9 @@ export class TournamentService {
 
         // Validar que exista la fecha/ronda
         if (assignment.stageType === 'GROUP') {
-          const roundExists = await queryRunner.query(
-            `
-            SELECT 1
-            FROM rounds
-            WHERE tournamentId = ?
-              AND stage = 'GROUP'
-              AND matchday = ?
-            LIMIT 1
-            `,
+          const roundExists = await callProcedureRows(
+            queryRunner,
+            'sp_ap_find_group_matchday',
             [assignment.tournamentId, assignment.stageNumber],
           );
 
@@ -1875,15 +1432,9 @@ export class TournamentService {
             );
           }
         } else {
-          const roundExists = await queryRunner.query(
-            `
-            SELECT 1
-            FROM rounds
-            WHERE tournamentId = ?
-              AND stage = 'KO'
-              AND round = ?
-            LIMIT 1
-            `,
+          const roundExists = await callProcedureRows(
+            queryRunner,
+            'sp_ap_find_ko_round',
             [assignment.tournamentId, assignment.stageNumber],
           );
 
@@ -1895,15 +1446,9 @@ export class TournamentService {
         }
 
         // Evitar duplicados
-        const exists = await queryRunner.query(
-          `
-          SELECT id
-          FROM season_week_assignments
-          WHERE seasonWeekId = ?
-            AND tournamentId = ?
-            AND stageType = ?
-            AND stageNumber = ?
-          `,
+        const exists = await callProcedureRows(
+          queryRunner,
+          'sp_ap_find_week_assignment',
           [
             seasonWeekId,
             assignment.tournamentId,
@@ -1914,17 +1459,9 @@ export class TournamentService {
 
         if (!exists.length) {
           // Insertar asignación
-          await queryRunner.query(
-            `
-            INSERT INTO season_week_assignments
-            (
-              seasonWeekId,
-              tournamentId,
-              stageType,
-              stageNumber
-            )
-            VALUES (?, ?, ?, ?)
-            `,
+          await callProcedureCommand(
+            queryRunner,
+            'sp_ap_create_week_assignment',
             [
               seasonWeekId,
               assignment.tournamentId,
@@ -1939,27 +1476,17 @@ export class TournamentService {
         // ============================
 
         if (assignment.stageType === 'GROUP') {
-          await queryRunner.query(
-            `
-            UPDATE rounds
-            SET seasonWeekId = ?
-            WHERE tournamentId = ?
-              AND stage = 'GROUP'
-              AND matchday = ?
-            `,
-            [seasonWeekId, assignment.tournamentId, assignment.stageNumber],
-          );
+          await callProcedureCommand(queryRunner, 'sp_ap_assign_group_week', [
+            seasonWeekId,
+            assignment.tournamentId,
+            assignment.stageNumber,
+          ]);
         } else {
-          await queryRunner.query(
-            `
-            UPDATE rounds
-            SET seasonWeekId = ?
-            WHERE tournamentId = ?
-              AND stage = 'KO'
-              AND round = ?
-            `,
-            [seasonWeekId, assignment.tournamentId, assignment.stageNumber],
-          );
+          await callProcedureCommand(queryRunner, 'sp_ap_assign_ko_week', [
+            seasonWeekId,
+            assignment.tournamentId,
+            assignment.stageNumber,
+          ]);
         }
       }
 
@@ -1990,41 +1517,16 @@ export class TournamentService {
 
     try {
       // Obtener semanas
-      const weeks = await this.dataSource.query(
-        `
-        SELECT
-            id,
-            weekNumber,
-            startDate,
-            endDate
-        FROM season_weeks
-        WHERE seasonId = ?
-        ORDER BY weekNumber
-        `,
+      const weeks = await callProcedureRows(
+        this.dataSource,
+        'sp_ap_get_season_weeks',
         [seasonId],
       );
 
       // Obtener todas las asignaciones
-      const assignments = await this.dataSource.query(
-        `
-        SELECT
-            swa.id,
-            swa.seasonWeekId,
-            swa.tournamentId,
-            t.name AS tournamentName,
-            swa.stageType,
-            swa.stageNumber
-        FROM season_week_assignments swa
-        INNER JOIN tournament t
-            ON t.id = swa.tournamentId
-        INNER JOIN season_weeks sw
-            ON sw.id = swa.seasonWeekId
-        WHERE sw.seasonId = ?
-        ORDER BY
-            sw.weekNumber,
-            t.name,
-            swa.stageNumber
-        `,
+      const assignments = await callProcedureRows(
+        this.dataSource,
+        'sp_ap_get_season_assignments',
         [seasonId],
       );
 
@@ -2062,52 +1564,10 @@ export class TournamentService {
       };
     }
 
-    const rows: any[] = await this.dataSource.query(
-      `
-      SELECT
-        r.tournamentId,
-        t.name AS tournamentName,
-        t.logo AS tournamentLogo,
-        r.matchday AS matchday,
-        NULL AS round
-      FROM rounds r
-      INNER JOIN tournament t ON t.id = r.tournamentId
-      WHERE r.tournamentId = ?
-        AND r.stage = 'GROUP'
-        AND r.matchday IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-          FROM season_week_assignments swa
-          WHERE swa.tournamentId = r.tournamentId
-            AND swa.stageType = 'GROUP'
-            AND swa.stageNumber = r.matchday
-        )
-      GROUP BY r.tournamentId, t.name, t.logo, r.matchday
-
-      UNION ALL
-
-      SELECT
-        r.tournamentId,
-        t.name AS tournamentName,
-        t.logo AS tournamentLogo,
-        NULL AS matchday,
-        r.round AS round
-      FROM rounds r
-      INNER JOIN tournament t ON t.id = r.tournamentId
-      WHERE r.tournamentId = ?
-        AND r.stage = 'KO'
-        AND NOT EXISTS (
-          SELECT 1
-          FROM season_week_assignments swa
-          WHERE swa.tournamentId = r.tournamentId
-            AND swa.stageType = 'KO'
-            AND swa.stageNumber = r.round
-        )
-      GROUP BY r.tournamentId, t.name, t.logo, r.round
-
-      ORDER BY matchday ASC, round ASC
-      `,
-      [idTournament, idTournament],
+    const rows: any[] = await callProcedureRows(
+      this.dataSource,
+      'sp_ap_get_unassigned_rounds_summary',
+      [idTournament],
     );
 
     return { message: 'Rondas obtenidas', data: rows };
@@ -2123,27 +1583,18 @@ export class TournamentService {
 
     try {
       // Validar que exista la temporada
-      const season = await queryRunner.query(
-        `
-        SELECT id
-        FROM seasons
-        WHERE id = ?
-        `,
-        [dto.seasonId],
-      );
+      const season = await callProcedureRows(queryRunner, 'sp_ap_find_season', [
+        dto.seasonId,
+      ]);
 
       if (!season.length) {
         throw new Error('La temporada no existe.');
       }
 
       // Validar que no exista el mismo número de semana
-      const exists = await queryRunner.query(
-        `
-        SELECT id
-        FROM season_weeks
-        WHERE seasonId = ?
-          AND weekNumber = ?
-        `,
+      const exists = await callProcedureRows(
+        queryRunner,
+        'sp_ap_find_week_by_number',
         [dto.seasonId, dto.weekNumber],
       );
 
@@ -2161,23 +1612,9 @@ export class TournamentService {
       }
 
       // Crear semana
-      const result = await queryRunner.query(
-        `
-        INSERT INTO season_weeks
-        (
-          seasonId,
-          weekNumber,
-          startDate,
-          endDate
-        )
-        VALUES
-        (
-          ?,
-          ?,
-          ?,
-          ?
-        )
-        `,
+      const result = await callProcedureCommand(
+        queryRunner,
+        'sp_ap_create_season_week',
         [dto.seasonId, dto.weekNumber, dto.startDate, dto.endDate],
       );
 
@@ -2209,11 +1646,9 @@ export class TournamentService {
     const apiResponse = new ApiResponse<any>();
 
     try {
-      const result: any = await this.dataSource.query(
-        `
-        DELETE FROM season_week_assignments
-        WHERE id = ?
-        `,
+      const result: any = await callProcedureCommand(
+        this.dataSource,
+        'sp_ap_delete_week_assignment',
         [assignmentId],
       );
 
@@ -2251,12 +1686,9 @@ export class TournamentService {
     await queryRunner.startTransaction();
 
     try {
-      const week = await queryRunner.query(
-        `
-        SELECT id
-        FROM season_weeks
-        WHERE id = ?
-        `,
+      const week = await callProcedureRows(
+        queryRunner,
+        'sp_ap_find_season_week',
         [weekId],
       );
 
@@ -2264,21 +1696,13 @@ export class TournamentService {
         throw new Error('La semana no existe.');
       }
 
-      await queryRunner.query(
-        `
-        DELETE FROM season_week_assignments
-        WHERE seasonWeekId = ?
-        `,
-        [weekId],
-      );
+      await callProcedureCommand(queryRunner, 'sp_ap_delete_week_assignments', [
+        weekId,
+      ]);
 
-      await queryRunner.query(
-        `
-        DELETE FROM season_weeks
-        WHERE id = ?
-        `,
-        [weekId],
-      );
+      await callProcedureCommand(queryRunner, 'sp_ap_delete_season_week', [
+        weekId,
+      ]);
 
       await queryRunner.commitTransaction();
 
