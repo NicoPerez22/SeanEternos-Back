@@ -4,16 +4,56 @@ import {
   Controller,
   Delete,
   Get,
+  HttpStatus,
   Param,
   ParseIntPipe,
   Post,
+  Put,
   Query,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import { CreateTournamentDto } from './dto/tournament.dto';
+import { AuthGuard } from 'src/auth/auth.guard';
+import { UserService } from 'src/user/user.service';
+import { RoundResultService, resultError } from './round-result.service';
 
 @Controller('tournament')
 export class TournamentController {
-  constructor(private tournamentService: TournamentService) {}
+  constructor(
+    private tournamentService: TournamentService,
+    private readonly roundResultService: RoundResultService,
+    private readonly userService: UserService,
+  ) {}
+
+  @Get('rounds/:roundId/result')
+  getRoundResult(@Param('roundId', ParseIntPipe) roundId: number) {
+    return this.roundResultService.getResult(roundId);
+  }
+
+  @Put('rounds/:roundId/result')
+  @UseGuards(AuthGuard)
+  async updateRoundResult(
+    @Param('roundId', ParseIntPipe) roundId: number,
+    @Body() body: any,
+    @Req() request: any,
+  ) {
+    await this.requireAdmin(request);
+    return this.roundResultService.updateResult(roundId, body);
+  }
+
+  /** El JWT solo trae el email: el rol se consulta en la base. */
+  private async requireAdmin(request: any): Promise<void> {
+    const user = request.user?.email
+      ? await this.userService.findOneByEmail(request.user.email)
+      : null;
+    if (Number(user?.idRol) !== 1) {
+      throw resultError(
+        HttpStatus.FORBIDDEN,
+        'Solo los administradores pueden editar resultados',
+      );
+    }
+  }
 
   @Get('formats')
   getFormats() {

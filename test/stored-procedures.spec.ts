@@ -78,7 +78,7 @@ describe('Stored procedure migration contract', () => {
     }
     inspectDirectory(join(root, 'src'));
     expect([...used].sort()).toEqual([...definitions.keys()].sort());
-    expect(used.size).toBe(50);
+    expect(used.size).toBe(54);
     expect(sql).not.toMatch(/\$\{|\?/);
     expect(sql.replace(/^--.*$/gm, '')).not.toMatch(
       /\b(?:COMMIT|ROLLBACK|START TRANSACTION)\b/i,

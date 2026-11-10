@@ -11,9 +11,12 @@ import { Player } from 'src/player/entity/player.entity';
 import { TeamService } from 'src/team/team.service';
 import { User } from 'src/user/entity/user.entity';
 import { ImagesService } from 'shared/services/images/images.service';
+import { UserModule } from 'src/user/user.module';
+import { RoundResultService } from './round-result.service';
 
 @Module({
   imports: [
+    UserModule,
     TypeOrmModule.forFeature([
       FormatTournament,
       Team,
@@ -25,7 +28,12 @@ import { ImagesService } from 'shared/services/images/images.service';
     ]),
   ],
   controllers: [TournamentController],
-  providers: [TournamentService, TeamService, ImagesService],
+  providers: [
+    TournamentService,
+    TeamService,
+    ImagesService,
+    RoundResultService,
+  ],
   exports: [TypeOrmModule, TournamentService],
 })
 export class TournamentModule {}

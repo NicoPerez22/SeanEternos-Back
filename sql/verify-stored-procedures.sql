@@ -1,4 +1,4 @@
--- Ejecutar en el esquema de la API. Resultado esperado: 63 filas con estado OK.
+-- Ejecutar en el esquema de la API. Resultado esperado: 67 filas con estado OK.
 -- No ejecuta procedimientos ni modifica datos.
 WITH expected AS (
 SELECT 'sp_ap_count_team_events' AS procedureName, 1 AS expectedParameters
@@ -100,6 +100,14 @@ UNION ALL
 SELECT 'sp_ap_persist_draft_assignments' AS procedureName, 1 AS expectedParameters
 UNION ALL
 SELECT 'sp_ap_insert_draft_log' AS procedureName, 2 AS expectedParameters
+UNION ALL
+SELECT 'sp_ap_get_round_result' AS procedureName, 1 AS expectedParameters
+UNION ALL
+SELECT 'sp_ap_get_round_result_events' AS procedureName, 1 AS expectedParameters
+UNION ALL
+SELECT 'sp_ap_lock_round_for_result' AS procedureName, 1 AS expectedParameters
+UNION ALL
+SELECT 'sp_ap_replace_match_result' AS procedureName, 4 AS expectedParameters
 UNION ALL
 SELECT 'sp_create_match_report_draft' AS procedureName, 6 AS expectedParameters
 UNION ALL

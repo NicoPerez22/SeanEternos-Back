@@ -11,7 +11,7 @@ Requiere MySQL 8.0.21 o posterior (incluido 8.4) y el esquema existente. No es u
 1. Abrir stored-procedures.sql en MySQL Workbench.
 2. Seleccionar como esquema predeterminado la misma base que usa la API.
 3. Ejecutar el archivo completo, incluidos los delimitadores.
-4. Ejecutar [verify-stored-procedures.sql](verify-stored-procedures.sql). Debe devolver 63 filas con estado OK: 50 SP nuevos y 13 preexistentes. Comprueba presencia y cantidad de parámetros, sin ejecutar lógica de negocio.
+4. Ejecutar [verify-stored-procedures.sql](verify-stored-procedures.sql). Debe devolver 67 filas con estado OK: 54 SP nuevos y 13 preexistentes. Comprueba presencia y cantidad de parámetros, sin ejecutar lógica de negocio.
 5. Desplegar la API después de importar y probar sobre una base de prueba.
 
 Alternativamente, desde la raíz del proyecto, iniciar el cliente:
@@ -40,6 +40,26 @@ Los SP nuevos no hacen COMMIT, ROLLBACK ni inician transacciones. Los servicios 
 Las asignaciones y logs del draft se envían como JSON parametrizado y se procesan con JSON_TABLE, manteniendo lotes de 700 y 800 registros. La selección de jugadores y las reglas del draft continúan en TypeScript.
 
 Los listados de ofertas comparten consultas con subconsultas independientes para jugadores solicitados y ofrecidos. Esto evita multiplicar los arrays al combinar ambas relaciones y reemplaza el JSON_ARRAYAGG(DISTINCT ...) anterior de pendientes, que no es sintaxis admitida por MySQL.
+
+## Edición de resultados
+
+GET y PUT /api/v1/tournament/rounds/:roundId/result usan sp_ap_get_round_result, sp_ap_get_round_result_events, sp_ap_lock_round_for_result y sp_ap_replace_match_result. El PUT exige JWT de administrador (idRol = 1). Solo admite partidos jugados (state = 1) que no sean nulos, y rechaza los partidos KO de una llave ya cerrada (ties.isFinished = 1), porque no recalcula al ganador.
+
+sp_ap_replace_match_result compara los eventos recibidos con los guardados por equipo, jugador, tipo y minuto:
+
+- Los eventos que coinciden se conservan con su id. Así se mantienen el orden de las tarjetas, la semana de inicio de las lesiones y las sanciones ya cumplidas. Sus notas solo se actualizan si el body envía notes.
+- Los eventos quitados se borran junto con sus tarjetas, lesiones y sanciones.
+- Los eventos nuevos siguen las reglas de sp_save_match_report: tarjetas, roja, doble amarilla, lesión con tournament_rules y valores por defecto. Para la semana de una lesión nueva se toma la semana asignada al partido y, si no tiene, la semana actual.
+
+Después se recalculan:
+
+- las dobles amarillas de la ronda;
+- la acumulación de amarillas de los jugadores afectados, contada en orden cronológico (fase, fecha o ronda, id) en lugar de por id;
+- las estadísticas, mediante sp_recalculate_statistics.
+
+Las sanciones nuevas cuyo período ya se jugó quedan como SERVED.
+
+Requiere MariaDB 10.6+ o MySQL 8.0.21+ (JSON_TABLE y funciones de ventana) y los permisos CREATE TEMPORARY TABLES y EXECUTE sobre sp_recalculate_statistics y fn_get_current_week. match_events.eventType solo admite GOAL, YELLOW, RED e INJURY, y la API rechaza cualquier otro tipo.
 
 ## SP preexistentes
 

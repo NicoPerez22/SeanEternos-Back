@@ -1080,4 +1080,427 @@ BEGIN
   SELECT ROW_COUNT() AS affectedRows, LAST_INSERT_ID() AS insertId;
 END$$
 
+-- src/tournament/round-result.service.ts:getResult
+DROP PROCEDURE IF EXISTS sp_ap_get_round_result$$
+CREATE PROCEDURE sp_ap_get_round_result(IN p_round_id INT)
+SQL SECURITY INVOKER
+BEGIN
+  SELECT r.id AS roundId, r.tournamentId, r.home AS homeTeamId, r.away AS awayTeamId,
+    r.homeGoals, r.awayGoals, r.state, COALESCE(r.isNullMatch, 0) AS isNullMatch,
+    r.stage, COALESCE(t.isFinished, 0) AS tieFinished
+  FROM rounds r
+  LEFT JOIN ties t ON t.id = r.tieId
+  WHERE r.id = p_round_id;
+END$$
+
+-- src/tournament/round-result.service.ts:getResult / updateResult
+-- Incluye eventos de todos los reportes de la ronda y el nombre del jugador
+-- aunque ya no pertenezca al plantel.
+DROP PROCEDURE IF EXISTS sp_ap_get_round_result_events$$
+CREATE PROCEDURE sp_ap_get_round_result_events(IN p_round_id INT)
+SQL SECURITY INVOKER
+BEGIN
+  SELECT me.id AS eventId, me.teamId, me.playerId,
+    CAST(me.eventType AS CHAR) AS eventType, me.minute, me.notes,
+    p.name AS playerName, p.lastName AS playerLastName
+  FROM match_events me
+  JOIN match_reports mr ON mr.id = me.reportId
+  LEFT JOIN players p ON p.id = me.playerId
+  WHERE mr.roundId = p_round_id
+  ORDER BY me.minute IS NULL, me.minute, me.id;
+END$$
+
+-- src/tournament/round-result.service.ts:updateResult
+-- Bloquea la ronda dentro de la transaccion de la API antes de validarla.
+DROP PROCEDURE IF EXISTS sp_ap_lock_round_for_result$$
+CREATE PROCEDURE sp_ap_lock_round_for_result(IN p_round_id INT)
+SQL SECURITY INVOKER
+BEGIN
+  SELECT r.id AS roundId, r.tournamentId, r.home AS homeTeamId, r.away AS awayTeamId,
+    r.homeGoals, r.awayGoals, r.state, COALESCE(r.isNullMatch, 0) AS isNullMatch,
+    r.stage, COALESCE(t.isFinished, 0) AS tieFinished
+  FROM rounds r
+  LEFT JOIN ties t ON t.id = r.tieId
+  WHERE r.id = p_round_id
+  FOR UPDATE;
+END$$
+
+-- src/tournament/round-result.service.ts:updateResult
+-- Reemplaza el resultado de una ronda ya jugada. Compara los eventos recibidos
+-- con los guardados por (equipo, jugador, tipo, minuto): los coincidentes se
+-- conservan con su id, para no alterar el orden de tarjetas, la semana de inicio
+-- de las lesiones ni el estado de sanciones ya cumplidas. Los eventos quitados
+-- se borran con sus tarjetas, lesiones y sanciones; los nuevos se insertan con
+-- las mismas reglas que sp_save_match_report. Despues se recalculan las
+-- sanciones de doble amarilla de la ronda y las de acumulacion de los
+-- jugadores afectados (en orden cronologico), y las estadisticas del torneo.
+DROP PROCEDURE IF EXISTS sp_ap_replace_match_result$$
+CREATE PROCEDURE sp_ap_replace_match_result(IN p_round_id INT, IN p_home_goals INT, IN p_away_goals INT, IN p_events JSON)
+SQL SECURITY INVOKER
+BEGIN
+  DECLARE v_tournament_id INT;
+  DECLARE v_home_team INT;
+  DECLARE v_away_team INT;
+  DECLARE v_matchday INT;
+  DECLARE v_unit_type VARCHAR(16);
+  DECLARE v_unit_value INT;
+  DECLARE v_week INT;
+  DECLARE v_report_id INT;
+  DECLARE v_locked INT;
+  DECLARE v_invalid INT DEFAULT 0;
+  DECLARE v_max_suspension BIGINT UNSIGNED DEFAULT 0;
+  DECLARE v_red_units INT DEFAULT 2;
+  DECLARE v_yellow_limit INT DEFAULT 3;
+  DECLARE v_yellow_units INT DEFAULT 1;
+  DECLARE v_injury_weeks INT DEFAULT 2;
+  DECLARE v_kept INT DEFAULT 0;
+  DECLARE v_added INT DEFAULT 0;
+  DECLARE v_removed INT DEFAULT 0;
+
+  SELECT r.tournamentId, r.home, r.away, r.matchday,
+    CASE WHEN r.matchday IS NOT NULL THEN 'MATCHDAY' ELSE 'ROUND' END,
+    COALESCE(r.matchday, r.round),
+    COALESCE(sw.weekNumber, fn_get_current_week(t.seasonId), 1)
+  INTO v_tournament_id, v_home_team, v_away_team, v_matchday,
+    v_unit_type, v_unit_value, v_week
+  FROM rounds r
+  JOIN tournament t ON t.id = r.tournamentId
+  LEFT JOIN season_weeks sw ON sw.id = r.seasonWeekId
+  WHERE r.id = p_round_id;
+
+  IF v_tournament_id IS NULL THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'El partido no existe';
+  END IF;
+
+  -- Serializa ediciones del mismo torneo: la acumulacion de amarillas es global.
+  SELECT t.id INTO v_locked FROM tournament t WHERE t.id = v_tournament_id FOR UPDATE;
+
+  -- Mismas reglas y valores por defecto que sp_save_match_report.
+  IF EXISTS (SELECT 1 FROM tournament_rules WHERE tournamentId = v_tournament_id) THEN
+    SELECT COALESCE(injuryWeeks, 2), COALESCE(redSuspensionUnits, 1),
+      yellowCardsForSuspension, COALESCE(yellowSuspensionUnits, 1)
+    INTO v_injury_weeks, v_red_units, v_yellow_limit, v_yellow_units
+    FROM tournament_rules
+    WHERE tournamentId = v_tournament_id;
+  END IF;
+
+  SELECT MAX(mr.id) INTO v_report_id FROM match_reports mr WHERE mr.roundId = p_round_id;
+  IF v_report_id IS NULL THEN
+    INSERT INTO match_reports (roundId, tournamentId, homeGoals, awayGoals)
+    VALUES (p_round_id, v_tournament_id, p_home_goals, p_away_goals);
+    SET v_report_id = LAST_INSERT_ID();
+  END IF;
+  UPDATE match_reports
+  SET homeGoals = p_home_goals, awayGoals = p_away_goals
+  WHERE roundId = p_round_id;
+
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_new_events;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_old_events;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_added_events;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_card_players;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_accumulation;
+
+  -- Tipos comparados por codigo numerico (orden del ENUM de match_events) para
+  -- evitar mezclas de collation entre JSON_TABLE y la tabla.
+  CREATE TEMPORARY TABLE tmp_ap_new_events (
+    seq INT NOT NULL PRIMARY KEY,
+    teamId INT NULL,
+    playerId BIGINT UNSIGNED NULL,
+    typeCode INT NOT NULL,
+    minute INT NULL,
+    notes VARCHAR(255) NULL,
+    hasNotes TINYINT NOT NULL,
+    rn INT NOT NULL,
+    matchedEventId INT NULL
+  );
+  INSERT INTO tmp_ap_new_events (seq, teamId, playerId, typeCode, minute, notes, hasNotes, rn)
+  SELECT j.seq, j.teamId, j.playerId,
+    FIELD(j.eventType, 'GOAL', 'YELLOW', 'RED', 'INJURY'),
+    j.minute, j.notes, j.hasNotes,
+    ROW_NUMBER() OVER (
+      PARTITION BY j.teamId, j.playerId,
+        FIELD(j.eventType, 'GOAL', 'YELLOW', 'RED', 'INJURY'), j.minute
+      ORDER BY j.seq
+    )
+  FROM JSON_TABLE(p_events, '$[*]' COLUMNS (
+    seq FOR ORDINALITY,
+    teamId INT PATH '$.teamId',
+    playerId BIGINT PATH '$.playerId',
+    eventType VARCHAR(16) PATH '$.eventType',
+    minute INT PATH '$.minute',
+    notes VARCHAR(255) PATH '$.notes',
+    hasNotes TINYINT EXISTS PATH '$.notes'
+  )) AS j;
+
+  SELECT COUNT(*) INTO v_invalid
+  FROM tmp_ap_new_events n
+  WHERE n.typeCode = 0
+    OR n.teamId IS NULL
+    OR n.teamId NOT IN (v_home_team, v_away_team);
+  IF v_invalid > 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Hay eventos con tipo o equipo invalido para este partido';
+  END IF;
+
+  CREATE TEMPORARY TABLE tmp_ap_old_events (
+    eventId INT NOT NULL PRIMARY KEY,
+    teamId INT NOT NULL,
+    playerId BIGINT UNSIGNED NULL,
+    typeCode INT NOT NULL,
+    minute INT NULL,
+    rn INT NOT NULL,
+    keepEvent TINYINT NOT NULL DEFAULT 0
+  );
+  INSERT INTO tmp_ap_old_events (eventId, teamId, playerId, typeCode, minute, rn)
+  SELECT me.id, me.teamId, me.playerId, me.eventType + 0, me.minute,
+    ROW_NUMBER() OVER (
+      PARTITION BY me.teamId, me.playerId, me.eventType + 0, me.minute
+      ORDER BY me.id
+    )
+  FROM match_events me
+  JOIN match_reports mr ON mr.id = me.reportId
+  WHERE mr.roundId = p_round_id;
+
+  UPDATE tmp_ap_new_events n
+  JOIN tmp_ap_old_events o
+    ON o.teamId = n.teamId
+    AND o.playerId <=> n.playerId
+    AND o.typeCode = n.typeCode
+    AND o.minute <=> n.minute
+    AND o.rn = n.rn
+  SET n.matchedEventId = o.eventId, o.keepEvent = 1;
+
+  SELECT COUNT(*) INTO v_kept FROM tmp_ap_old_events WHERE keepEvent = 1;
+  SELECT COUNT(*) INTO v_removed FROM tmp_ap_old_events WHERE keepEvent = 0;
+
+  -- Jugadores con tarjetas agregadas o quitadas en esta ronda.
+  CREATE TEMPORARY TABLE tmp_ap_card_players (
+    playerId BIGINT UNSIGNED NOT NULL PRIMARY KEY
+  );
+  INSERT IGNORE INTO tmp_ap_card_players (playerId)
+  SELECT c.playerId
+  FROM player_tournament_cards c
+  JOIN tmp_ap_old_events o ON o.eventId = c.eventId
+  WHERE o.keepEvent = 0;
+
+  -- Eventos quitados: primero lo que depende de ellos.
+  DELETE ps FROM player_tournament_suspensions ps
+  JOIN player_tournament_cards c ON c.id = ps.sourceCardId
+  JOIN tmp_ap_old_events o ON o.eventId = c.eventId
+  WHERE o.keepEvent = 0;
+
+  DELETE pu FROM player_unavailability pu
+  JOIN tmp_ap_old_events o ON o.eventId = pu.sourceEventId
+  WHERE o.keepEvent = 0;
+
+  DELETE c FROM player_tournament_cards c
+  JOIN tmp_ap_old_events o ON o.eventId = c.eventId
+  WHERE o.keepEvent = 0;
+
+  DELETE me FROM match_events me
+  JOIN tmp_ap_old_events o ON o.eventId = me.id
+  WHERE o.keepEvent = 0;
+
+  UPDATE match_events me
+  JOIN tmp_ap_new_events n ON n.matchedEventId = me.id
+  SET me.notes = n.notes
+  WHERE n.hasNotes = 1;
+
+  INSERT INTO match_events (reportId, teamId, playerId, eventType, minute, notes)
+  SELECT v_report_id, n.teamId, n.playerId,
+    ELT(n.typeCode, 'GOAL', 'YELLOW', 'RED', 'INJURY'), n.minute, n.notes
+  FROM tmp_ap_new_events n
+  WHERE n.matchedEventId IS NULL
+  ORDER BY n.seq;
+  SET v_added = ROW_COUNT();
+
+  CREATE TEMPORARY TABLE tmp_ap_added_events (
+    eventId INT NOT NULL PRIMARY KEY
+  );
+  INSERT INTO tmp_ap_added_events (eventId)
+  SELECT me.id
+  FROM match_events me
+  WHERE me.reportId = v_report_id
+    AND NOT EXISTS (SELECT 1 FROM tmp_ap_old_events o WHERE o.eventId = me.id);
+
+  INSERT INTO player_tournament_cards (
+    tournamentId, roundId, matchday, reportId, eventId, playerId, teamId, cardType
+  )
+  SELECT v_tournament_id, p_round_id, v_matchday, me.reportId, me.id,
+    me.playerId, me.teamId, CAST(me.eventType AS CHAR)
+  FROM match_events me
+  JOIN tmp_ap_added_events a ON a.eventId = me.id
+  WHERE me.eventType IN ('YELLOW', 'RED')
+    AND me.playerId IS NOT NULL;
+
+  INSERT IGNORE INTO tmp_ap_card_players (playerId)
+  SELECT c.playerId
+  FROM player_tournament_cards c
+  JOIN tmp_ap_added_events a ON a.eventId = c.eventId;
+
+  INSERT INTO player_unavailability (
+    playerId, teamId, reason, sourceTournamentId, sourceRoundId,
+    sourceReportId, sourceEventId, startWeekNumber, durationWeeks, notes
+  )
+  SELECT me.playerId, me.teamId, 'INJURY', v_tournament_id, p_round_id,
+    me.reportId, me.id, v_week, v_injury_weeks, me.notes
+  FROM match_events me
+  JOIN tmp_ap_added_events a ON a.eventId = me.id
+  WHERE me.eventType = 'INJURY'
+    AND me.playerId IS NOT NULL;
+
+  UPDATE rounds
+  SET homeGoals = p_home_goals,
+    awayGoals = p_away_goals,
+    teamWin = CASE
+      WHEN p_home_goals > p_away_goals THEN home
+      WHEN p_away_goals > p_home_goals THEN away
+      ELSE NULL
+    END,
+    teamLose = CASE
+      WHEN p_home_goals < p_away_goals THEN home
+      WHEN p_away_goals < p_home_goals THEN away
+      ELSE NULL
+    END,
+    state = 1
+  WHERE id = p_round_id;
+
+  SELECT COALESCE(MAX(id), 0) INTO v_max_suspension FROM player_tournament_suspensions;
+
+  -- Doble amarilla que dejo de serlo (se quito una amarilla o se agrego una roja).
+  DELETE ps FROM player_tournament_suspensions ps
+  JOIN player_tournament_cards c ON c.id = ps.sourceCardId
+  WHERE c.roundId = p_round_id
+    AND ps.suspensionType = 'DOUBLE_YELLOW'
+    AND (
+      (SELECT COUNT(*) FROM player_tournament_cards y
+        WHERE y.roundId = p_round_id AND y.playerId = c.playerId
+          AND y.cardType = 'YELLOW') < 2
+      OR EXISTS (SELECT 1 FROM player_tournament_cards x
+        WHERE x.roundId = p_round_id AND x.playerId = c.playerId
+          AND x.cardType = 'RED')
+    );
+
+  INSERT INTO player_tournament_suspensions (
+    tournamentId, playerId, teamId, sourceCardId, suspensionType,
+    unitType, fromUnitValue, untilUnitValue, matchesToServe, status
+  )
+  SELECT v_tournament_id, c.playerId, c.teamId, MAX(c.id), 'DOUBLE_YELLOW',
+    v_unit_type, v_unit_value + 1, v_unit_value + v_yellow_units,
+    v_yellow_units, 'ACTIVE'
+  FROM player_tournament_cards c
+  JOIN tmp_ap_card_players cp ON cp.playerId = c.playerId
+  WHERE c.roundId = p_round_id
+    AND c.cardType = 'YELLOW'
+    AND NOT EXISTS (SELECT 1 FROM player_tournament_cards x
+      WHERE x.roundId = p_round_id AND x.playerId = c.playerId
+        AND x.cardType = 'RED')
+    AND NOT EXISTS (SELECT 1 FROM player_tournament_suspensions ps
+      JOIN player_tournament_cards s ON s.id = ps.sourceCardId
+      WHERE ps.suspensionType = 'DOUBLE_YELLOW'
+        AND s.roundId = p_round_id AND s.playerId = c.playerId)
+  GROUP BY c.playerId, c.teamId
+  HAVING COUNT(*) >= 2;
+
+  INSERT INTO player_tournament_suspensions (
+    tournamentId, playerId, teamId, sourceCardId, suspensionType,
+    unitType, fromUnitValue, untilUnitValue, matchesToServe, status
+  )
+  SELECT v_tournament_id, c.playerId, c.teamId, c.id, 'RED',
+    v_unit_type, v_unit_value + 1, v_unit_value + v_red_units,
+    v_red_units, 'ACTIVE'
+  FROM player_tournament_cards c
+  JOIN tmp_ap_added_events a ON a.eventId = c.eventId
+  WHERE c.cardType = 'RED';
+
+  -- Acumulacion: se recalcula el torneo completo de los jugadores afectados,
+  -- contando amarillas en orden cronologico (fase, fecha o ronda, id).
+  IF v_yellow_limit IS NOT NULL AND v_yellow_limit > 0 THEN
+    CREATE TEMPORARY TABLE tmp_ap_accumulation (
+      cardId BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+      playerId BIGINT UNSIGNED NOT NULL,
+      teamId INT NOT NULL,
+      unitType VARCHAR(16) NOT NULL,
+      unitValue INT NOT NULL
+    );
+    INSERT INTO tmp_ap_accumulation (cardId, playerId, teamId, unitType, unitValue)
+    SELECT x.id, x.playerId, x.teamId, x.unitType, x.unitValue
+    FROM (
+      SELECT c.id, c.playerId, c.teamId,
+        CASE WHEN r.matchday IS NOT NULL THEN 'MATCHDAY' ELSE 'ROUND' END AS unitType,
+        COALESCE(r.matchday, r.round) AS unitValue,
+        ROW_NUMBER() OVER (
+          PARTITION BY c.playerId
+          ORDER BY r.stage + 0, COALESCE(r.matchday, r.round), c.roundId, c.id
+        ) AS yellowNumber,
+        COUNT(*) OVER (PARTITION BY c.playerId, c.roundId) AS roundYellows
+      FROM player_tournament_cards c
+      JOIN rounds r ON r.id = c.roundId
+      JOIN tmp_ap_card_players cp ON cp.playerId = c.playerId
+      WHERE c.tournamentId = v_tournament_id
+        AND c.cardType = 'YELLOW'
+    ) x
+    WHERE x.yellowNumber MOD v_yellow_limit = 0
+      AND x.roundYellows < 2;
+
+    DELETE ps FROM player_tournament_suspensions ps
+    JOIN tmp_ap_card_players cp ON cp.playerId = ps.playerId
+    LEFT JOIN tmp_ap_accumulation a ON a.cardId = ps.sourceCardId
+    WHERE ps.tournamentId = v_tournament_id
+      AND ps.suspensionType = 'YELLOW_ACCUMULATION'
+      AND a.cardId IS NULL;
+
+    INSERT INTO player_tournament_suspensions (
+      tournamentId, playerId, teamId, sourceCardId, suspensionType,
+      unitType, fromUnitValue, untilUnitValue, matchesToServe, status
+    )
+    SELECT v_tournament_id, a.playerId, a.teamId, a.cardId, 'YELLOW_ACCUMULATION',
+      a.unitType, a.unitValue + 1, a.unitValue + v_yellow_units,
+      v_yellow_units, 'ACTIVE'
+    FROM tmp_ap_accumulation a
+    WHERE NOT EXISTS (SELECT 1 FROM player_tournament_suspensions ps
+      WHERE ps.sourceCardId = a.cardId
+        AND ps.suspensionType = 'YELLOW_ACCUMULATION');
+  END IF;
+
+  -- Sanciones nuevas cuyo periodo ya paso: se marcan cumplidas en el primer
+  -- partido jugado por el equipo dentro del periodo.
+  UPDATE player_tournament_suspensions ps
+  SET ps.servedRoundId = (
+    SELECT r.id
+    FROM rounds r
+    WHERE r.tournamentId = ps.tournamentId
+      AND r.state = 1
+      AND ps.teamId IN (r.home, r.away)
+      AND (
+        (ps.unitType = 'MATCHDAY'
+          AND r.matchday BETWEEN ps.fromUnitValue AND ps.untilUnitValue)
+        OR (ps.unitType = 'ROUND' AND r.matchday IS NULL
+          AND r.round BETWEEN ps.fromUnitValue AND ps.untilUnitValue)
+      )
+    ORDER BY COALESCE(r.matchday, r.round), r.id
+    LIMIT 1
+  )
+  WHERE ps.tournamentId = v_tournament_id
+    AND ps.id > v_max_suspension
+    AND ps.status = 'ACTIVE';
+
+  UPDATE player_tournament_suspensions ps
+  SET ps.status = 'SERVED'
+  WHERE ps.tournamentId = v_tournament_id
+    AND ps.id > v_max_suspension
+    AND ps.status = 'ACTIVE'
+    AND ps.servedRoundId IS NOT NULL;
+
+  CALL sp_recalculate_statistics(v_tournament_id);
+
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_new_events;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_old_events;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_added_events;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_card_players;
+  DROP TEMPORARY TABLE IF EXISTS tmp_ap_accumulation;
+
+  SELECT v_report_id AS reportId, v_kept AS eventsKept,
+    v_added AS eventsAdded, v_removed AS eventsRemoved;
+END$$
+
 DELIMITER ;
