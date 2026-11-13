@@ -112,7 +112,7 @@ export class PlayerController {
   pending(@Query('page') page?: string, @Query('limit') limit?: string) {
     return this.playerService.listPending(
       Number(page ?? 1),
-      Number(30),
+      Number(60),
     );
   }
 
